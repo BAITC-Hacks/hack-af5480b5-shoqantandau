@@ -159,10 +159,11 @@ def sku_detail(request, supplier, code):
 
     # график: сырые продажи против очищенного спроса (тот же расчёт, что и в заказе)
     from . import charts, engine as eng
-    chart, calc = "", None
+    chart, calc, seasonal_rows = "", None, []
     res = eng.calculate(data, eng.Params(codes=[code]))
     if not res.empty:
         calc = res.iloc[0]
+        seasonal_rows = eng.seasonal_comparison(calc, data.data_date)
         det = calc["details"]
         months = det["months"]
         so = {months.index(f"{y}-{m:02d}") for y, m in
@@ -171,7 +172,7 @@ def sku_detail(request, supplier, code):
         oo = {months.index(o["month"]) for o in det["one_offs"] if o["month"] in months}
         chart = charts.demand_chart(months, det["raw"], det["clean"], so, oo)
     return render(request, "procurement/sku.html", {
-        "chart": chart, "calc": calc,
+        "chart": chart, "calc": calc, "seasonal_rows": seasonal_rows,
         "supplier": data.name, "supplier_key": supplier, "code": code, "item": item,
         "rows": rows, "top_docs": top_docs.to_dict("records"),
         "next_arrival": None if pd.isna(item["next_arrival"]) else pd.Timestamp(item["next_arrival"]).date(),

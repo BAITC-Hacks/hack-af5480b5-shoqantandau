@@ -24,6 +24,8 @@ DATA_DIR = BASE_DIR / "data" / "demo"
 SUPPLIERS = {
     "iek": {"name": "IEK", "dir": DATA_DIR / "iek", "lead_time_days": None},
     "se": {"name": "Systeme Electric", "dir": DATA_DIR / "se", "lead_time_days": 40},
+    "techno": {"name": "ТехноСезон (синтетические данные)", "dir": DATA_DIR / "techno",
+               "lead_time_days": 20, "synthetic": True},
 }
 DATA_FILES = {
     "sales_transactions": "sales_transactions.xlsx",  # построчные расходные накладные

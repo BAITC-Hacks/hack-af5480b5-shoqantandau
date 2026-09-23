@@ -30,7 +30,7 @@ MONTHS_RU = {"янв": 1, "фев": 2, "мар": 3, "апр": 4, "май": 5, "�
 MONTHS_GEN = {"января": 1, "февраля": 2, "марта": 3, "апреля": 4, "мая": 5, "июня": 6,
               "июля": 7, "августа": 8, "сентября": 9, "октября": 10, "ноября": 11, "декабря": 12}
 
-CACHE_VERSION = 9
+CACHE_VERSION = 11
 
 
 @dataclass
@@ -290,13 +290,15 @@ def read_in_transit(path: Path, data_date: date) -> tuple[pd.DataFrame, pd.DataF
         if tcol:
             shipments.extend({"code": sku, "qty": float(v), "arrival_date": arr}
                              for sku, v in zip(df[code], qty) if v > 0)
-        for src, dst in [("Категория 2026", "abc_class"), ("Свободный остаток", "stock_free"), ("СС реал", "cost"),
-                         ("Остаток", "stock_total"), ("Артикул поставщика", "article"),
-                         ("Наименование", "name")]:
-            try:
-                extra[dst] = df[_col(df, src)].values
-            except KeyError:
-                pass
+    # A dated shipment report can also include the current free stock and cost.
+    has_current_stock = any(str(c).strip().lower() == "свободный остаток" for c in df.columns)
+    for src, dst in ([("Категория 2026", "abc_class"), ("Свободный остаток", "stock_free"), ("СС реал", "cost"),
+                     ("Остаток", "stock_total"), ("Артикул поставщика", "article"),
+                     ("Наименование", "name")] if not order_cols or has_current_stock else []):
+        try:
+            extra[dst] = df[_col(df, src)].values
+        except KeyError:
+            pass
 
     per_sku = per_sku.groupby("code", as_index=False).agg(in_transit=("in_transit", "sum"),
                                                           next_arrival=("next_arrival", "min"))
@@ -389,6 +391,8 @@ def load_supplier(key: str, directory: Path | None = None) -> SupplierData:
         raise FileNotFoundError(f"{sup['name']}: нет файлов {', '.join(missing)}")
 
     warnings: list[str] = []
+    if sup.get("synthetic"):
+        warnings.append("СИНТЕТИЧЕСКИЕ ДАННЫЕ: вымышленная компания и учебные сценарии; не продажи партнёра.")
     tx = read_transactions(files["sales_transactions"])
     data_date = tx["date"].max().date() if not tx.empty else date.today()
 

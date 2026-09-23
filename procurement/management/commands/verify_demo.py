@@ -10,7 +10,7 @@ from procurement import backtest, engine, loaders
 
 
 class Command(BaseCommand):
-    help = "Проверить 12 реальных выгрузок и расчёт по двум поставщикам."
+    help = "Проверить выгрузки и расчёт по всем подключённым поставщикам, включая синтетические данные."
 
     def add_arguments(self, parser):
         parser.add_argument("--backtest", action="store_true", help="Также пересчитать проверку прогноза на истории")

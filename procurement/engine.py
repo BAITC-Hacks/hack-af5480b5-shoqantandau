@@ -345,6 +345,25 @@ def _build_matrix(data: SupplierData, months: list[pd.Period], col: str) -> pd.D
     return _memo(data, ("matrix", col, tuple(months)), build).copy()
 
 
+def seasonal_comparison(row, data_date: date) -> list[dict]:
+    """Isolate the learned season; not a dated purchasing plan or a backtest.
+
+    Every scenario uses 30 days, the same current stock, no inbound receipts,
+    no growth, the default safety coefficient and the same order multiple.
+    """
+    idx = np.asarray(row["details"]["season_idx"], dtype=float)
+    base = float(row["regular_demand"]) / idx[data_date.month - 1]
+    safety = Params().service_z * float(row["details"]["sigma"])
+    moq = float(row["moq"])
+    rows = []
+    for month, factor in enumerate(idx, 1):
+        demand = base * factor
+        quantity = max(0, math.ceil((demand + safety - float(row["stock"])) / moq) * moq)
+        rows.append({"month": MONTH_NAMES[month - 1], "index": float(factor),
+                     "demand": float(demand), "qty": int(quantity)})
+    return rows
+
+
 def calculate(data: SupplierData, params: Params | None = None) -> pd.DataFrame:
     p = params or Params()
     p.validate()

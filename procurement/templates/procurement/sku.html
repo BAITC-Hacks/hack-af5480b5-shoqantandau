@@ -29,6 +29,20 @@
 {% endif %}
 
 <div class="row g-4">
+  {% if seasonal_rows %}
+  <section class="col-12"><div class="panel">
+    <h2 class="h5">Зима и лето: сравнение при одинаковых условиях</h2>
+    <p>Для каждого месяца берём 30 дней, одинаковый текущий остаток {{ item.stock_now|floatformat:0 }} {{ item.unit }}
+      и страховой запас. Рост и новые поступления отключены, кратность сохранена.
+      Меняется только сезонный коэффициент, рассчитанный по истории.</p>
+    <p class="note">Это сравнение влияния сезона, не календарный план закупок. Коэффициент 1 — средний сезон,
+      больше 1 — повышенный спрос. Фактический заказ выше учитывает срок поставки, рост и товары в пути.</p>
+    <div class="table-responsive"><table class="table table-hover align-middle mb-0">
+      <thead><tr><th>Месяц</th><th class="num">Коэффициент сезона</th><th class="num">Спрос за 30 дней, {{ item.unit }}</th><th class="num">Условный заказ, {{ item.unit }}</th></tr></thead>
+      <tbody>{% for s in seasonal_rows %}<tr><td>{{ s.month }}</td><td class="num">{{ s.index|floatformat:2 }}</td><td class="num">{{ s.demand|floatformat:0 }}</td><td class="num">{{ s.qty }}</td></tr>{% endfor %}</tbody>
+    </table></div>
+  </div></section>
+  {% endif %}
   <section class="col-lg-7"><div class="panel">
     <h2 class="h5">По месяцам</h2>
     <table class="table table-hover align-middle mb-0">

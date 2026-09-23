@@ -15,6 +15,7 @@ urlpatterns = [
     path("reload/", views.reload_data, name="reload"),
     path("upload/", views.upload_data, name="upload"),
     path("upload/reset/", views.reset_uploads, name="reset_uploads"),
-    path("sku/", views.sku_search, name="sku_search"),
+    path("sku/", views.catalog, name="sku_search"),
+    path("line/<int:pk>/reason/", views.line_reason, name="line_reason"),
     path("sku/<str:supplier>/<str:code>/", views.sku_detail, name="sku_detail"),
 ]

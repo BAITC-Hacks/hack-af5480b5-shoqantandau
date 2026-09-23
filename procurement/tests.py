@@ -196,3 +196,28 @@ class MustHave5GroupedWithReasons(SimpleTestCase):
         self.assertTrue((r["reason"].str.len() > 20).all())
         self.assertTrue(r["reason"].str.contains("до следующего заказа").all())
         self.assertEqual(set(r["supplier"]), {"test"})
+
+
+from django.contrib.auth.models import User  # noqa: E402
+from django.test import TestCase  # noqa: E402
+
+
+class RolesAndAccess(TestCase):
+    """Вход обязателен; роли ограничивают действия (демо-пользователи создаются миграцией)."""
+
+    def test_login_required(self):
+        r = self.client.get("/")
+        self.assertEqual(r.status_code, 302)
+        self.assertIn("/login/", r["Location"])
+
+    def test_demo_users_exist_with_roles(self):
+        self.assertTrue(User.objects.get(username="manager").has_perm("procurement.edit_order"))
+        self.assertFalse(User.objects.get(username="viewer").has_perm("procurement.run_calculation"))
+        self.assertTrue(User.objects.get(username="admin").has_perm("procurement.manage_data"))
+        self.assertFalse(User.objects.get(username="manager").has_perm("procurement.manage_data"))
+
+    def test_viewer_cannot_calculate_or_upload(self):
+        self.client.login(username="viewer", password="viewer12345")
+        self.assertEqual(self.client.get("/").status_code, 200)
+        self.assertEqual(self.client.post("/", {"use_outliers": "on"}).status_code, 403)
+        self.assertEqual(self.client.post("/upload/", {}).status_code, 403)

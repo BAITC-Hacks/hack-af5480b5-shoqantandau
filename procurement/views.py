@@ -8,8 +8,29 @@ from django.shortcuts import redirect, render
 from django.views.decorators.http import require_POST
 
 import constants
+from django.contrib.auth.views import LoginView
+from django.core.exceptions import PermissionDenied
 
 from . import loaders
+
+
+def _need(request, perm: str):
+    """Проверка права роли; без права — понятная страница «Недостаточно прав»."""
+    if not request.user.has_perm(f"procurement.{perm}"):
+        raise PermissionDenied(perm)
+
+
+class DemoLoginView(LoginView):
+    template_name = "procurement/login.html"
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["demo_users"] = [
+            ("manager", "manager12345", "Менеджер закупа", "считает, правит, утверждает и скачивает заказ"),
+            ("viewer", "viewer12345", "Наблюдатель", "только просмотр: руководитель, склад"),
+            ("admin", "admin12345", "Администратор", "всё + загрузка данных 1С и пользователи"),
+        ] if constants.SHOW_DEMO_USERS else []
+        return ctx
 
 
 def _data_status():
@@ -49,6 +70,7 @@ def index(request):
 @require_POST
 def upload_data(request):
     """Загрузка новой выгрузки 1С вместо демо-файла. Если файл не разбирается — откат."""
+    _need(request, "manage_data")
     sup = request.POST.get("supplier")
     kind = request.POST.get("kind")
     f = request.FILES.get("file")
@@ -80,6 +102,7 @@ def upload_data(request):
 
 @require_POST
 def reset_uploads(request):
+    _need(request, "manage_data")
     shutil.rmtree(loaders.UPLOAD_DIR, ignore_errors=True)
     shutil.rmtree(loaders.CACHE_DIR, ignore_errors=True)
     loaders._MEMORY.clear()
@@ -89,6 +112,7 @@ def reset_uploads(request):
 
 @require_POST
 def reload_data(request):
+    _need(request, "manage_data")
     shutil.rmtree(loaders.CACHE_DIR, ignore_errors=True)
     loaders._MEMORY.clear()
     messages.info(request, "Данные перечитаны из файлов.")
@@ -134,6 +158,31 @@ def sku_detail(request, supplier, code):
     })
 
 
+def catalog(request):
+    """Каталог товаров обоих поставщиков: поиск, фильтры и сортировка прямо в браузере."""
+    rows, groups = [], {}
+    for key in constants.SUPPLIERS:
+        data = loaders.get_supplier(key)
+        last_full = pd.Period(data.data_date, freq="M") - 1
+        m = data.monthly
+        s12 = m[(m["month"] > last_full - 12) & (m["month"] <= last_full)].groupby("code")["sales_1c"].sum()
+        s1 = m[m["month"] == last_full].groupby("code")["sales_1c"].sum()
+        it = data.items
+        for code, r in it.iterrows():
+            g = str(r["category"])
+            groups.setdefault(g, r["name"][:32])
+            rows.append({"sup": key, "supName": data.name, "code": code, "article": str(r["article"] or ""),
+                         "name": r["name"], "group": g, "unit": r["unit"],
+                         "stock": round(float(r["stock_now"] or 0)), "transit": round(float(r["in_transit"] or 0)),
+                         "moq": int(r["moq"] or 1), "s12": round(float(s12.get(code, 0))), "s1": round(float(s1.get(code, 0))),
+                         "marked": bool(r.get("marked", False)),
+                         "cost": round(float(r["cost"]), 2) if pd.notna(r.get("cost")) else None})
+    return render(request, "procurement/catalog.html", {
+        "rows": rows, "suppliers": constants.SUPPLIERS,
+        "groups": sorted(groups.items()), "q": request.GET.get("q", ""),
+    })
+
+
 def sku_search(request):
     q = request.GET.get("q", "").strip()
     results = []
@@ -167,6 +216,7 @@ def _num(v, cast=float):
 
 def run_form(request):
     if request.method == "POST":
+        _need(request, "run_calculation")
         f = request.POST
         lead_times = {k: v for k in constants.SUPPLIERS if (v := _num(f.get(f"lead_{k}"), int))}
         params = engine.Params(
@@ -180,7 +230,7 @@ def run_form(request):
             use_growth=bool(f.get("use_growth")),
         )
         sup = f.get("supplier") or ""
-        run = services.run_calculation(params, [sup] if sup in constants.SUPPLIERS else None)
+        run = services.run_calculation(params, [sup] if sup in constants.SUPPLIERS else None, user=request.user)
         return redirect("procurement:run_detail", run.pk)
     # группы товаров для выбора — только если данные уже разобраны (иначе страница открывалась бы 20–30 с)
     groups = []
@@ -201,7 +251,7 @@ def run_form(request):
     return render(request, "procurement/run_form.html", {
         "suppliers": [(k, v["name"], leads[k]) for k, v in constants.SUPPLIERS.items()],
         "review_days": constants.REVIEW_PERIOD_DAYS, "groups": groups, "cached": cached,
-        "runs": CalculationRun.objects.all()[:10],
+        "runs": CalculationRun.objects.select_related("created_by")[:15],
     })
 
 
@@ -227,7 +277,10 @@ def _apply_edits(request, run):
             changed += 1
     if action in ("approve", "reject", "reset") and ids:
         status = {"approve": "approved", "reject": "rejected", "reset": "new"}[action]
-        n = run.lines.filter(pk__in=ids).update(status=status)
+        from django.utils import timezone
+        n = run.lines.filter(pk__in=ids).update(
+            status=status, decided_by=None if action == "reset" else request.user,
+            decided_at=None if action == "reset" else timezone.now())
         label = {"approve": "Утверждено товаров", "reject": "Отмечено «не заказываем»",
                  "reset": "Возвращено в работу"}[action]
         messages.success(request, f"{label}: {n}.")
@@ -244,41 +297,51 @@ VIEWS = [("order", "К заказу"), ("urgent", "Срочные"), ("review", 
 def run_detail(request, pk):
     run = get_object_or_404(CalculationRun, pk=pk)
     if request.method == "POST":
+        _need(request, "edit_order")
         _apply_edits(request, run)
         return redirect(request.get_full_path())
     sup_keys = [k for k in run.supplier.split(",") if k]
     active = request.GET.get("supplier") or (sup_keys[0] if sup_keys else "")
     view = request.GET.get("view", "order")
-    q = request.GET.get("q", "").strip()
-
-    base = run.lines.filter(supplier=active).defer("details")
-    lines = {
-        "order": base.filter(qty_recommended__gt=0),
-        "urgent": base.filter(qty_recommended__gt=0, urgency="high"),
-        "review": base.filter(needs_review=True),
-        "approved": base.filter(status="approved"),
-        "all": base,
-    }.get(view, base.filter(qty_recommended__gt=0))
-    if q:
-        from django.db.models import Q
-        lines = lines.filter(Q(code_1c__icontains=q) | Q(name__icontains=q) | Q(article__icontains=q))
-    order = {"high": 0, "medium": 1, "low": 2}
-    lines = sorted(lines, key=lambda x: (order.get(x.urgency, 3), x.days_of_cover or 0))
-    page = Paginator(lines, 50).get_page(request.GET.get("page"))
     stat = run.stats.get(active, {})
-    counts = {
-        "order": stat.get("sku_to_order", 0), "urgent": stat.get("high", 0), "review": stat.get("review", 0),
-        "approved": run.lines.filter(supplier=active, status="approved").count(), "all": stat.get("sku_calculated", 0),
-    }
+    fields = ["pk", "code_1c", "article", "name", "category", "stock", "in_transit", "regular_demand", "moq",
+              "qty_recommended", "qty_final", "urgency", "days_of_cover", "status", "needs_review", "cost"]
+    rows = []
+    for l in run.lines.filter(supplier=active).only(*fields):
+        final = l.qty_to_order
+        rows.append({
+            "id": l.pk, "code": l.code_1c, "article": l.article, "name": l.name, "group": l.category,
+            "stock": round(l.stock), "transit": round(l.in_transit), "demand": round(l.regular_demand, 1),
+            "moq": int(l.moq), "rec": l.qty_recommended, "qty": final, "edited": l.qty_final is not None,
+            "urg": l.urgency, "urgRank": {"high": 0, "medium": 1, "low": 2}.get(l.urgency, 3),
+            "cover": None if (l.days_of_cover or 0) >= 9999 else round(l.days_of_cover, 1),
+            "status": l.status, "review": l.needs_review,
+            "sum": round(l.cost * final) if l.cost else None,
+        })
+    rows.sort(key=lambda r: (r["urgRank"], r["cover"] if r["cover"] is not None else 1e9))
+    approved = sum(1 for r in rows if r["status"] == "approved")
     return render(request, "procurement/run_detail.html", {
         "run": run, "active": active, "tabs": [(k, run.stats.get(k, {})) for k in sup_keys],
-        "stat": stat, "page": page, "view": view, "q": q,
-        "views": [(k, label, counts.get(k, 0)) for k, label in VIEWS],
-        "approved": counts["approved"],
+        "stat": stat, "view": view, "views": VIEWS, "rows": rows, "approved": approved,
         "value_saved": (stat.get("value_raw", 0) or 0) - (stat.get("value_total", 0) or 0),
         "qty_saved": (stat.get("qty_raw_total", 0) or 0) - (stat.get("qty_total", 0) or 0),
-        "ai_label": llm.provider_label() if llm.is_enabled() else "",
+        "can_edit": request.user.has_perm("procurement.edit_order"),
+        "can_export": request.user.has_perm("procurement.export_order"),
     })
+
+
+def line_reason(request, pk):
+    """Обоснование строки — подгружается при раскрытии, чтобы список открывался мгновенно."""
+    from .templatetags.procurement_extras import sentences
+    l = get_object_or_404(OrderLine.objects.select_related("decided_by"), pk=pk)
+    who = ""
+    if l.decided_by and l.decided_at:
+        from django.utils import timezone
+        who = (f"{'Утвердил' if l.status == 'approved' else 'Отметил «не заказываем»'}: "
+               f"{l.decided_by.get_full_name() or l.decided_by.username}, "
+               f"{timezone.localtime(l.decided_at):%d.%m.%Y %H:%M}")
+    return JsonResponse({"sentences": sentences(l.reason), "ai": l.reason_ai, "who": who,
+                         "supplier": l.supplier, "code": l.code_1c})
 
 
 # ---------- экспорт ----------
@@ -292,6 +355,7 @@ from openpyxl.styles import Alignment, Font  # noqa: E402
 
 def export_run(request, pk):
     """Выгрузка в xlsx: лист на каждого поставщика, по умолчанию только утверждённые позиции."""
+    _need(request, "export_order")
     run = get_object_or_404(CalculationRun, pk=pk)
     scope = request.GET.get("scope", "approved")
     only = request.GET.get("supplier")
@@ -424,6 +488,7 @@ from . import backtest  # noqa: E402
 
 def backtest_view(request):
     if request.method == "POST":
+        _need(request, "run_calculation")
         backtest.run()
         messages.success(request, "Бэктест пересчитан.")
         return redirect("procurement:backtest")

@@ -5,32 +5,31 @@
 <p class="lead">Возьмите любой товар и посмотрите, как меняется совет системы, если добавить крупную продажу, товар в пути, изменить остаток или рост. Настоящие данные при этом не меняются.</p>
 
 <form method="get" class="panel" data-loading="Пересчитываем…">
-  <div class="form-grid" style="margin-top:0">
-    <label>Поставщик
-      <select name="supplier">{% for k, s in suppliers.items %}<option value="{{ k }}" {% if k == sup %}selected{% endif %}>{{ s.name }}</option>{% endfor %}</select>
-    </label>
-    <label>Код товара в 1С <input name="code" value="{{ code }}" required></label>
-    <label>Крупная разовая продажа, шт. <input name="big_qty" type="number" min="1" value="{{ big_qty|floatformat:0 }}"></label>
-    <label>Добавить товара в пути, шт. <input name="transit_add" type="number" min="0" value="{{ transit_add|floatformat:0 }}"></label>
-    <label>Остаток на складе, шт. <input name="stock_val" type="number" min="0" value="{{ stock_val|floatformat:0 }}"></label>
-    <label>Ожидаемый рост продаж, % <input name="growth" type="number" value="{{ growth|floatformat:0 }}"></label>
+  <div class="row g-3">
+    <div class="col-md-4 col-lg-2"><label class="form-label" for="c-sup">Поставщик</label>
+      <select class="form-select" id="c-sup" name="supplier">{% for k, s in suppliers.items %}<option value="{{ k }}" {% if k == sup %}selected{% endif %}>{{ s.name }}</option>{% endfor %}</select></div>
+    <div class="col-md-8 col-lg-2"><label class="form-label" for="c-code">Код товара в 1С</label><input class="form-control" id="c-code" name="code" value="{{ code }}" required></div>
+    <div class="col-6 col-lg-2"><label class="form-label" for="c-big">Разовая продажа, шт.</label><input class="form-control" id="c-big" name="big_qty" type="number" min="1" value="{{ big_qty|floatformat:0 }}"></div>
+    <div class="col-6 col-lg-2"><label class="form-label" for="c-tr">Добавить в пути, шт.</label><input class="form-control" id="c-tr" name="transit_add" type="number" min="0" value="{{ transit_add|floatformat:0 }}"></div>
+    <div class="col-6 col-lg-2"><label class="form-label" for="c-st">Остаток, шт.</label><input class="form-control" id="c-st" name="stock_val" type="number" min="0" value="{{ stock_val|floatformat:0 }}"></div>
+    <div class="col-6 col-lg-2"><label class="form-label" for="c-g">Рост продаж, %</label><input class="form-control" id="c-g" name="growth" type="number" value="{{ growth|floatformat:0 }}"></div>
   </div>
-  <p style="margin:16px 0 0"><button class="btn" type="submit">Пересчитать</button></p>
+  <button class="btn btn-primary mt-3" type="submit"><i class="bi bi-arrow-repeat me-1"></i>Пересчитать</button>
 </form>
 
-{% if error %}<div class="flash flash-error" style="margin-top:16px">{{ error }}</div>{% endif %}
+{% if error %}<div class="alert alert-danger" style="margin-top:16px">{{ error }}</div>{% endif %}
 
 {% if rows %}
-<h2 style="margin-top:28px">{{ item.name }}</h2>
+<h2 class="h4 mt-4 mb-1">{{ item.name }}</h2>
 <p class="note">{{ supplier_name }}, код {{ code }} · <a href="{% url 'procurement:sku_detail' sup code %}">график продаж</a></p>
-<div class="table-wrap">
-<table class="grid">
+<div class="table-card"><div class="table-responsive">
+<table class="table table-hover align-middle mb-0">
   <thead><tr><th>Что меняем</th><th>Что это показывает</th><th class="num">Спрос в месяц</th><th class="num">Советуем заказать</th><th class="num">Разница</th></tr></thead>
   <tbody>
   {% for r in rows %}
     <tr class="{% if r.key == 'base' %}row-base{% endif %}">
       <td><b>{{ r.title }}</b>
-        <details class="why"><summary>Почему столько?</summary><div class="why-box"><ul>{% for sent in r.reason|sentences %}<li>{{ sent }}</li>{% endfor %}</ul></div></details></td>
+        <details class="mt-1"><summary>Почему столько?</summary><div class="why-box small mt-1"><ul>{% for sent in r.reason|sentences %}<li>{{ sent }}</li>{% endfor %}</ul></div></details></td>
       <td>{{ r.hint|capfirst }}{% if r.req %}<span class="hint-req">{{ r.req|lower }} кейса</span>{% endif %}</td>
       <td class="num">{{ r.demand|floatformat:1 }}</td>
       <td class="num rec">{{ r.qty|num }}</td>
@@ -39,6 +38,6 @@
   {% endfor %}
   </tbody>
 </table>
-</div>
+</div></div>
 {% endif %}
 {% endblock %}

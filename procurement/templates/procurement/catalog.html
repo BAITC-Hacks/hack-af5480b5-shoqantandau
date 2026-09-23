@@ -1,0 +1,60 @@
+{% extends "procurement/base.html" %}
+{% load static %}
+{% block content %}
+<h1>Товары</h1>
+<p class="lead">Все товары обоих поставщиков. Поиск срабатывает сразу, по заголовкам колонок можно сортировать. Нажмите на товар, чтобы увидеть продажи по месяцам и совет по заказу.</p>
+
+<div class="panel mb-3">
+  <div class="row g-2 align-items-end">
+    <div class="col-lg-4">
+      <label class="form-label small text-muted" for="q">Поиск</label>
+      <div class="input-group"><span class="input-group-text bg-white"><i class="bi bi-search"></i></span>
+        <input type="search" class="form-control" id="q" value="{{ q }}" placeholder="Например: розетка BRITE или 030200519" autofocus></div>
+    </div>
+    <div class="col-6 col-lg-2"><label class="form-label small text-muted" for="f-sup">Поставщик</label>
+      <select class="form-select" id="f-sup"><option value="">Все</option>{% for k, s in suppliers.items %}<option value="{{ k }}">{{ s.name }}</option>{% endfor %}</select></div>
+    <div class="col-6 col-lg-3"><label class="form-label small text-muted" for="f-group">Группа</label>
+      <select class="form-select" id="f-group"><option value="">Все группы</option>{% for g, ex in groups %}<option value="{{ g }}">{{ g }} — {{ ex }}…</option>{% endfor %}</select></div>
+    <div class="col-lg-3"><label class="form-label small text-muted" for="f-state">Показать</label>
+      <select class="form-select" id="f-state">
+        <option value="">Все товары</option><option value="sold">Продавались за год</option><option value="out">Нет на складе, но продаются</option>
+        <option value="transit">Есть товар в пути</option><option value="marked">С пометкой «!!!»</option></select></div>
+  </div>
+</div>
+
+<div class="table-card">
+  <div class="table-responsive">
+  <table class="table table-hover align-middle" id="cat">
+    <thead><tr>
+      <th data-sort="name">Товар</th><th data-sort="supName">Поставщик</th>
+      <th class="num" data-sort="stock" data-dir="desc">На складе</th><th class="num" data-sort="transit" data-dir="desc">В пути</th>
+      <th class="num" data-sort="s1" data-dir="desc">Продано за прошлый месяц</th><th class="num" data-sort="s12" data-dir="desc">Продано за год</th>
+      <th class="num" data-sort="moq" data-dir="desc">Кратность</th><th class="num" data-sort="cost" data-dir="desc">Себестоимость, ₸</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  </div>
+  <div class="table-foot" id="foot"></div>
+</div>
+{{ rows|json_script:"cat-data" }}
+{% endblock %}
+{% block scripts %}
+<script src="{% static 'procurement/table.js' %}"></script>
+<script>
+  const data = JSON.parse(document.getElementById('cat-data').textContent);
+  const t = new SmartTable({
+    data, table: '#cat', foot: '#foot', search: '#q', searchKeys: ['name', 'code', 'article'], sortKey: 's12', sortDir: -1,
+    rowHtml: r => `<tr style="cursor:pointer" onclick="location.href='/sku/${r.sup}/${encodeURIComponent(r.code)}/'">
+      <td><a class="prod-name text-decoration-none" href="/sku/${r.sup}/${encodeURIComponent(r.code)}/">${esc(r.name)}</a>
+        <div class="prod-meta">код ${esc(r.code)}${r.article ? ' · ' + esc(r.article) : ''} · группа ${esc(r.group)}${r.marked ? ' <span class="pill warn ms-1">!!!</span>' : ''}</div></td>
+      <td>${esc(r.supName)}</td>
+      <td class="num">${r.stock ? fmt(r.stock) + ' ' + esc(r.unit) : '<span class="pill high">нет</span>'}</td>
+      <td class="num">${r.transit ? fmt(r.transit) : '—'}</td>
+      <td class="num">${fmt(r.s1)}</td><td class="num"><b>${fmt(r.s12)}</b></td>
+      <td class="num">${r.moq > 1 ? r.moq : '—'}</td><td class="num">${r.cost != null ? r.cost.toLocaleString('ru') : '—'}</td></tr>`,
+  });
+  document.getElementById('f-sup').addEventListener('change', e => t.setFilter('sup', e.target.value ? r => r.sup === e.target.value : null));
+  document.getElementById('f-group').addEventListener('change', e => t.setFilter('group', e.target.value ? r => r.group === e.target.value : null));
+  const states = {sold: r => r.s12 > 0, out: r => r.stock <= 0 && r.s12 > 0, transit: r => r.transit > 0, marked: r => r.marked};
+  document.getElementById('f-state').addEventListener('change', e => t.setFilter('state', states[e.target.value] || null));
+</script>
+{% endblock %}

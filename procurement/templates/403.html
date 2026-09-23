@@ -1,0 +1,9 @@
+{% extends "procurement/base.html" %}
+{% block content %}
+<div class="panel text-center py-5">
+  <div class="display-5 text-warning mb-3"><i class="bi bi-shield-lock"></i></div>
+  <h1 class="h3">Для этого действия у вашей роли нет прав</h1>
+  <p class="lead mx-auto">Ваша роль — «{{ request.user.groups.first.name|default:"не назначена" }}». Расчёт, правку и скачивание заказа делает менеджер закупа, загрузку данных 1С — администратор.</p>
+  <a class="btn btn-primary" href="{% url 'procurement:run_form' %}">Вернуться к заказам</a>
+</div>
+{% endblock %}

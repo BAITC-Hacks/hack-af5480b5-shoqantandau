@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 
 
@@ -9,9 +10,19 @@ class CalculationRun(models.Model):
     category = models.CharField("Категория", max_length=64, blank=True)
     params = models.JSONField("Параметры расчёта", default=dict)
     stats = models.JSONField("Сводка", default=dict)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, verbose_name="Кто запустил", null=True, blank=True,
+                                   on_delete=models.SET_NULL, related_name="+")
 
     class Meta:
         ordering = ["-created_at"]
+        verbose_name = "расчёт"
+        verbose_name_plural = "расчёты"
+        permissions = [
+            ("run_calculation", "Запускать расчёт заказов"),
+            ("edit_order", "Править количество и утверждать заказ"),
+            ("export_order", "Скачивать заказ для 1С"),
+            ("manage_data", "Загружать выгрузки 1С"),
+        ]
 
     def __str__(self):
         return f"Расчёт #{self.pk} от {self.created_at:%d.%m.%Y %H:%M}"
@@ -47,6 +58,9 @@ class OrderLine(models.Model):
     status = models.CharField("Статус", max_length=16, choices=STATUS_CHOICES, default="new")
     needs_review = models.BooleanField("Требует проверки", default=False)
     cost = models.FloatField("Себестоимость единицы", null=True, blank=True)
+    decided_by = models.ForeignKey(settings.AUTH_USER_MODEL, verbose_name="Кто решил", null=True, blank=True,
+                                   on_delete=models.SET_NULL, related_name="+")
+    decided_at = models.DateTimeField("Когда решено", null=True, blank=True)
 
     class Meta:
         ordering = ["supplier", "-days_of_cover"]

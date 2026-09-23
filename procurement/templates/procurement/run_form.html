@@ -1,70 +1,82 @@
 {% extends "procurement/base.html" %}
 {% load procurement_extras %}
 {% block content %}
-<h1>Заказы поставщикам</h1>
-<p class="lead">Система сама посчитает, что и сколько заказать, по продажам, остаткам и товару в пути из 1С. Вы проверяете, при необходимости исправляете и утверждаете. Поставщику ничего не отправляется без вас.</p>
+<div class="row align-items-end g-3 mb-3">
+  <div class="col-lg-8">
+    <h1>Здравствуйте, {{ user.get_full_name|default:user.username }}</h1>
+    <p class="lead mb-0">Система сама посчитает, что и сколько заказать, по продажам, остаткам и товару в пути из 1С. Вы проверяете, при необходимости исправляете и утверждаете. Поставщику ничего не отправляется без вас.</p>
+  </div>
+</div>
 
-<ol class="steps">
-  <li><b>Рассчитайте заказ</b><span>Одна кнопка ниже — настройки уже подобраны</span></li>
-  <li><b>Проверьте список</b><span>Срочные товары — сверху, у каждого есть объяснение</span></li>
-  <li><b>Утвердите и скачайте</b><span>Файл Excel для загрузки в 1С</span></li>
-</ol>
+<div class="row g-3 mb-4">
+  <div class="col-md-4"><div class="step"><div class="n">1</div><div><b>Рассчитайте заказ</b><span>Одна кнопка ниже — настройки уже подобраны</span></div></div></div>
+  <div class="col-md-4"><div class="step"><div class="n">2</div><div><b>Проверьте список</b><span>Срочные товары сверху, у каждого есть объяснение</span></div></div></div>
+  <div class="col-md-4"><div class="step"><div class="n">3</div><div><b>Утвердите и скачайте</b><span>Файл Excel для загрузки в 1С</span></div></div></div>
+</div>
 
-<form method="post" class="panel start" data-loading="Считаем заказ…" data-loading-text="Обычно это занимает 5–15 секунд.">{% csrf_token %}
-  <div>
-    <p class="field-title">Для какого поставщика</p>
-    <div class="seg" role="radiogroup">
-      <input type="radio" name="supplier" id="sup-all" value="" checked><label for="sup-all">Все поставщики</label>
-      {% for k, name, lead in suppliers %}<input type="radio" name="supplier" id="sup-{{ k }}" value="{{ k }}"><label for="sup-{{ k }}">{{ name }}</label>{% endfor %}
-    </div>
+{% if perms.procurement.run_calculation %}
+<form method="post" class="panel mb-4" data-loading="Считаем заказ…" data-loading-text="Обычно это занимает несколько секунд.">{% csrf_token %}
+  <p class="fw-semibold mb-2">Для какого поставщика</p>
+  <div class="btn-group flex-wrap mb-3" role="group" aria-label="Поставщик">
+    <input type="radio" class="btn-check" name="supplier" id="sup-all" value="" checked><label class="btn btn-outline-primary" for="sup-all">Все поставщики</label>
+    {% for k, name, lead in suppliers %}<input type="radio" class="btn-check" name="supplier" id="sup-{{ k }}" value="{{ k }}"><label class="btn btn-outline-primary" for="sup-{{ k }}">{{ name }}</label>{% endfor %}
   </div>
 
-  <details class="more">
+  <details class="more mb-3">
     <summary>Дополнительные настройки</summary>
-    <div class="form-grid">
-      <label>Группа товаров
+    <div class="row g-3 mt-1">
+      <div class="col-md-6"><label class="form-label" for="f-cat">Группа товаров</label>
         {% if groups %}
-        <select name="category"><option value="">Все группы</option>
+        <select class="form-select" name="category" id="f-cat"><option value="">Все группы</option>
           {% for g in groups %}<option value="{{ g.code }}">{{ g.example }}… ({{ g.n }} тов., группа {{ g.code }})</option>{% endfor %}
         </select>
-        {% else %}<input name="category" placeholder="все группы"><small>Список групп появится после первого расчёта</small>{% endif %}
-      </label>
+        {% else %}<input class="form-control" name="category" id="f-cat" placeholder="все группы"><div class="form-text">Список групп появится после первого расчёта</div>{% endif %}
+      </div>
       {% for k, name, lead in suppliers %}
-      <label>Сколько дней везёт {{ name }}
-        <input name="lead_{{ k }}" type="number" min="1" placeholder="{% if lead %}{{ lead }}{% else %}по данным{% endif %}">
-        <small>Пусто — {% if lead %}{{ lead }} дн.{% else %}по фактическим заказам{% endif %}</small>
-      </label>
+      <div class="col-md-3"><label class="form-label" for="lead-{{ k }}">Сколько дней везёт {{ name }}</label>
+        <input class="form-control" id="lead-{{ k }}" name="lead_{{ k }}" type="number" min="1" placeholder="{% if lead %}{{ lead }}{% else %}по данным{% endif %}">
+        <div class="form-text">Пусто — {% if lead %}{{ lead }} дн.{% else %}по фактическим заказам{% endif %}</div></div>
       {% endfor %}
-      <label>Как часто делаете заказ, дней
-        <input name="review_days" type="number" min="1" value="{{ review_days }}">
-        <small>Заказ должен покрыть этот период</small>
-      </label>
-      <label>Ожидаемый рост продаж, %
-        <input name="growth_plan_pct" type="number" step="1" placeholder="по истории">
-        <small>Пусто — система оценит рост по прошлым годам</small>
-      </label>
-      <div class="checks">
-        <label class="check"><input type="checkbox" name="use_outliers" checked><span>Не учитывать разовые крупные продажи<small>Большой заказ одного клиента не должен раздувать обычный спрос</small></span></label>
-        <label class="check"><input type="checkbox" name="use_stockout" checked><span>Учитывать, что товара не было на складе<small>Если товар кончался, продаж было меньше, чем могло быть</small></span></label>
-        <label class="check"><input type="checkbox" name="use_seasonality" checked><span>Учитывать сезон<small>Летом и осенью продаётся больше, зимой меньше</small></span></label>
-        <label class="check"><input type="checkbox" name="use_growth" checked><span>Учитывать рост или падение продаж</span></label>
+      <div class="col-md-3"><label class="form-label" for="f-rev">Как часто заказываете, дней</label>
+        <input class="form-control" id="f-rev" name="review_days" type="number" min="1" value="{{ review_days }}"><div class="form-text">Заказ покроет этот период</div></div>
+      <div class="col-md-3"><label class="form-label" for="f-g">Ожидаемый рост продаж, %</label>
+        <input class="form-control" id="f-g" name="growth_plan_pct" type="number" step="1" placeholder="по истории"><div class="form-text">Пусто — по прошлым годам</div></div>
+      <div class="col-12">
+        <div class="form-check form-switch mb-2"><input class="form-check-input" type="checkbox" role="switch" name="use_outliers" id="sw1" checked>
+          <label class="form-check-label" for="sw1">Не учитывать разовые крупные продажи <span class="text-muted small">— большой заказ одного клиента не раздувает обычный спрос</span></label></div>
+        <div class="form-check form-switch mb-2"><input class="form-check-input" type="checkbox" role="switch" name="use_stockout" id="sw2" checked>
+          <label class="form-check-label" for="sw2">Учитывать, что товара не было на складе <span class="text-muted small">— тогда продаж было меньше, чем могло быть</span></label></div>
+        <div class="form-check form-switch mb-2"><input class="form-check-input" type="checkbox" role="switch" name="use_seasonality" id="sw3" checked>
+          <label class="form-check-label" for="sw3">Учитывать сезон</label></div>
+        <div class="form-check form-switch"><input class="form-check-input" type="checkbox" role="switch" name="use_growth" id="sw4" checked>
+          <label class="form-check-label" for="sw4">Учитывать рост или падение продаж</label></div>
       </div>
     </div>
   </details>
-
-  <div><button class="btn btn-big" type="submit">Рассчитать заказ</button></div>
-  {% if not cached %}<p class="note">Самый первый расчёт после запуска может занять до полуминуты — система читает выгрузки 1С.</p>{% endif %}
+  <button class="btn btn-primary btn-lg px-4" type="submit"><i class="bi bi-calculator me-2"></i>Рассчитать заказ</button>
+  {% if not cached %}<p class="note mt-2 mb-0">Первый расчёт после запуска может занять до полуминуты — система читает выгрузки 1С.</p>{% endif %}
 </form>
+{% else %}
+<div class="alert alert-info"><i class="bi bi-eye me-2"></i>У вас роль «{{ user.groups.first.name|default:"—" }}»: можно смотреть расчёты, товары и точность прогноза. Запускает расчёт и утверждает заказ менеджер закупа.</div>
+{% endif %}
 
 {% if runs %}
-<h2 style="margin-top:32px">Прошлые расчёты</h2>
-<div class="runs">
-  {% for r in runs %}
-  <a class="run-card" href="{% url 'procurement:run_detail' r.pk %}">
-    <span><b>Расчёт от {{ r.created_at|date:"d.m.Y, H:i" }}</b>{% if r.category %} <span class="muted">· группа {{ r.category }}</span>{% endif %}</span>
-    <span class="muted">{% for k, s in r.stats.items %}{{ s.name }}: {{ s.sku_to_order|num }} к заказу{% if not forloop.last %} · {% endif %}{% endfor %}</span>
-  </a>
-  {% endfor %}
+<h2 class="h5 mb-3">Расчёты</h2>
+<div class="table-card mb-4">
+  <table class="table table-hover align-middle">
+    <thead><tr><th>Когда</th><th>Кто запустил</th><th>Поставщики</th>{% for k, name, lead in suppliers %}<th class="num">{{ name }}: к заказу</th>{% endfor %}<th></th></tr></thead>
+    <tbody>
+    {% for r in runs %}
+      <tr style="cursor:pointer" onclick="location.href='{% url 'procurement:run_detail' r.pk %}'">
+        <td><b>{{ r.created_at|date:"d.m.Y, H:i" }}</b>{% if r.category %}<div class="small text-muted">группа {{ r.category }}</div>{% endif %}</td>
+        <td>{% if r.created_by %}{{ r.created_by.get_full_name|default:r.created_by.username }}{% else %}—{% endif %}</td>
+        <td>{% for k, s in r.stats.items %}{{ s.name }}{% if not forloop.last %}, {% endif %}{% endfor %}</td>
+        {% for k, name, lead in suppliers %}<td class="num">{% with s=r.stats|get_item:k %}{% if s %}{{ s.sku_to_order|num }}{% else %}—{% endif %}{% endwith %}</td>{% endfor %}
+        <td class="text-end"><a class="btn btn-sm btn-outline-primary" href="{% url 'procurement:run_detail' r.pk %}">Открыть</a></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
 </div>
 {% endif %}
 {% endblock %}

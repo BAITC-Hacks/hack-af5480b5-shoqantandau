@@ -13,6 +13,9 @@ SECRET_KEY = "dev-only-hackalem-not-for-production"
 DEBUG = True
 ALLOWED_HOSTS = ["*"]
 
+# Показывать демо-логины на странице входа (для проверки на хакатоне; в работе — False)
+SHOW_DEMO_USERS = True
+
 # --- Данные ---
 DATA_DIR = BASE_DIR / "data" / "demo"
 

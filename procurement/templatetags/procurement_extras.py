@@ -73,3 +73,11 @@ def sentences(text):
         return []
     parts = re.split(r"(?<=[.!])\s+(?=[А-ЯЁA-Z])", str(text).strip())
     return [p for p in (x.strip() for x in parts) if p]
+
+
+@register.filter
+def get_item(d, key):
+    try:
+        return d.get(key)
+    except AttributeError:
+        return None

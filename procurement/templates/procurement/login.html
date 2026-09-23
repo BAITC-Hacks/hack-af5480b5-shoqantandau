@@ -1,0 +1,48 @@
+{% extends "procurement/base.html" %}
+{% block title %}Вход — Заказы поставщикам{% endblock %}
+{% block body %}
+<div class="login-wrap">
+  <div class="login-card">
+    <div class="text-center text-white mb-4">
+      <div class="fs-1"><i class="bi bi-box-seam"></i></div>
+      <h1 class="h3 mb-1">Заказы поставщикам</h1>
+      <div class="opacity-75">Пополнение склада · Электрокомплект</div>
+    </div>
+    <div class="card shadow-lg border-0 rounded-4">
+      <div class="card-body p-4">
+        <h2 class="h5 mb-3">Вход</h2>
+        {% if form.errors %}<div class="alert alert-danger py-2">Неверный логин или пароль. Проверьте раскладку клавиатуры и Caps Lock.</div>{% endif %}
+        <form method="post">{% csrf_token %}
+          <div class="mb-3"><label class="form-label" for="id_username">Логин</label>
+            <input class="form-control form-control-lg" id="id_username" name="username" autocomplete="username" required autofocus value="{{ form.username.value|default:'' }}"></div>
+          <div class="mb-3"><label class="form-label" for="id_password">Пароль</label>
+            <input class="form-control form-control-lg" id="id_password" name="password" type="password" autocomplete="current-password" required></div>
+          <input type="hidden" name="next" value="{{ next }}">
+          <button class="btn btn-primary btn-lg w-100" type="submit">Войти</button>
+        </form>
+        {% if demo_users %}
+        <hr>
+        <p class="small text-muted mb-2"><i class="bi bi-info-circle me-1"></i>Демо-доступ для проверки — нажмите на строку, чтобы подставить логин и пароль:</p>
+        <div class="list-group">
+          {% for login, pwd, role, what in demo_users %}
+          <button type="button" class="list-group-item list-group-item-action demo-user" data-u="{{ login }}" data-p="{{ pwd }}">
+            <div class="d-flex justify-content-between"><b>{{ role }}</b><code>{{ login }} / {{ pwd }}</code></div>
+            <small class="text-muted">{{ what }}</small>
+          </button>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+  document.querySelectorAll('.demo-user').forEach(b => b.addEventListener('click', () => {
+    document.getElementById('id_username').value = b.dataset.u;
+    document.getElementById('id_password').value = b.dataset.p;
+    document.querySelector('.login-card form').submit();
+  }));
+</script>
+{% endblock %}

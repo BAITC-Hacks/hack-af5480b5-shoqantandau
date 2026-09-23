@@ -1,7 +1,7 @@
 {% extends "procurement/base.html" %}
 {% load procurement_extras %}
 {% block content %}
-<p class="crumbs"><a href="{% url 'procurement:sku_search' %}">Товары</a> / {{ supplier }}</p>
+<nav aria-label="breadcrumb"><ol class="breadcrumb mb-1"><li class="breadcrumb-item"><a href="{% url 'procurement:sku_search' %}">Товары</a></li><li class="breadcrumb-item active">{{ supplier }}</li></ol></nav>
 <h1>{{ item.name }}</h1>
 <dl class="facts">
   <div><dt>Код 1С</dt><dd>{{ code }}</dd></div>
@@ -14,13 +14,13 @@
 </dl>
 
 {% if chart %}
-<section class="panel chart-panel">
+<section class="panel mb-4">
   <h2>Продажи по месяцам</h2>
   {{ chart|safe }}
   <p class="legend"><span class="lg lg-bar"></span> продажи из 1С <span class="lg lg-oneoff"></span> месяц с исключённой разовой продажей
     <span class="lg lg-line"></span> очищенный спрос для расчёта <span class="lg lg-so"></span> товара не было</p>
   {% if calc is not None %}
-  <div class="why-box" style="margin-top:14px">
+  <div class="why-box mt-3 p-3 bg-light rounded-3">
     <p style="margin:0 0 8px"><b>Сейчас советуем заказать: {{ calc.qty_recommended }}</b> <span class="muted">(если не чистить данные — {{ calc.qty_raw }})</span></p>
     <ul>{% for sent in calc.reason|sentences %}<li>{{ sent }}</li>{% endfor %}</ul>
     <div class="why-links"><a href="{% url 'procurement:check' %}?supplier={{ supplier_key }}&code={{ code }}">Что будет, если…</a></div>
@@ -28,10 +28,10 @@
 </section>
 {% endif %}
 
-<div class="two-col">
-  <section>
-    <h2>По месяцам</h2>
-    <table class="grid">
+<div class="row g-4">
+  <section class="col-lg-7"><div class="panel">
+    <h2 class="h5">По месяцам</h2>
+    <table class="table table-hover align-middle mb-0">
       <thead><tr><th>Месяц</th><th class="num">Продано (отчёт 1С)</th><th class="num">Продано (по накладным)</th><th class="num">Остаток на 1-е число</th></tr></thead>
       <tbody>
       {% for r in rows %}
@@ -41,16 +41,16 @@
       {% endfor %}
       </tbody>
     </table>
-    <p class="note">Строки с нулевым остатком на начало месяца подсвечены — это месяцы, когда товар мог закончиться.</p>
-  </section>
-  <section>
-    <h2>Самые крупные продажи</h2>
-    <table class="grid">
+    <p class="note mt-2">Строки с нулевым остатком на начало месяца подсвечены — это месяцы, когда товар мог закончиться.</p>
+  </div></section>
+  <section class="col-lg-5"><div class="panel">
+    <h2 class="h5">Самые крупные продажи</h2>
+    <table class="table table-hover align-middle mb-0">
       <thead><tr><th>Накладная</th><th>Дата</th><th class="num">Кол-во</th></tr></thead>
       <tbody>
       {% for d in top_docs %}<tr><td>{{ d.doc }}</td><td>{{ d.date|date:"d.m.Y" }}</td><td class="num">{{ d.qty|floatformat:0 }}</td></tr>{% endfor %}
       </tbody>
     </table>
-  </section>
+  </div></section>
 </div>
 {% endblock %}

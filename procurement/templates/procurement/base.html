@@ -4,31 +4,57 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Заказы поставщикам{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'procurement/vendor/bootstrap/bootstrap.min.css' %}">
+  <link rel="stylesheet" href="{% static 'procurement/vendor/icons/bootstrap-icons.min.css' %}">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{% static 'procurement/app.css' %}">
 </head>
 <body>
-  <header class="topbar"><div class="topbar-in">
-    <a class="brand" href="{% url 'procurement:run_form' %}">Заказы поставщикам<small>пополнение склада</small></a>
-    {% with u=request.resolver_match.url_name %}
-    <nav aria-label="Разделы">
-      <a href="{% url 'procurement:run_form' %}" class="{% if u == 'run_form' or u == 'run_detail' %}on{% endif %}">Заказы</a>
-      <a href="{% url 'procurement:sku_search' %}" class="{% if u == 'sku_search' or u == 'sku_detail' %}on{% endif %}">Товары</a>
-      <a href="{% url 'procurement:check' %}" class="{% if u == 'check' %}on{% endif %}">Как считается</a>
-      <a href="{% url 'procurement:backtest' %}" class="{% if u == 'backtest' %}on{% endif %}">Точность</a>
-      <a href="{% url 'procurement:index' %}" class="{% if u == 'index' %}on{% endif %}">Данные из 1С</a>
-    </nav>
-    {% endwith %}
-  </div></header>
-  <main class="page">
-    {% if messages %}{% for m in messages %}<div class="flash flash-{{ m.tags }}" role="status">{{ m }}</div>{% endfor %}{% endif %}
+{% block body %}
+  <nav class="navbar navbar-expand-xl navbar-dark app-nav">
+    <div class="container-xl">
+      <a class="navbar-brand" href="{% url 'procurement:run_form' %}"><i class="bi bi-box-seam me-2"></i>Заказы поставщикам<small>пополнение склада · Электрокомплект</small></a>
+      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#nav" aria-controls="nav" aria-expanded="false" aria-label="Меню"><span class="navbar-toggler-icon"></span></button>
+      {% with u=request.resolver_match.url_name %}
+      <div class="collapse navbar-collapse" id="nav">
+        <ul class="navbar-nav me-auto gap-1 ms-lg-3">
+          <li class="nav-item"><a class="nav-link {% if u == 'run_form' or u == 'run_detail' %}active{% endif %}" href="{% url 'procurement:run_form' %}"><i class="bi bi-cart-check me-1"></i>Заказы</a></li>
+          <li class="nav-item"><a class="nav-link {% if u == 'sku_search' or u == 'sku_detail' %}active{% endif %}" href="{% url 'procurement:sku_search' %}"><i class="bi bi-search me-1"></i>Товары</a></li>
+          <li class="nav-item"><a class="nav-link {% if u == 'check' %}active{% endif %}" href="{% url 'procurement:check' %}"><i class="bi bi-lightbulb me-1"></i>Как считается</a></li>
+          <li class="nav-item"><a class="nav-link {% if u == 'backtest' %}active{% endif %}" href="{% url 'procurement:backtest' %}"><i class="bi bi-bullseye me-1"></i>Точность</a></li>
+          <li class="nav-item"><a class="nav-link {% if u == 'index' %}active{% endif %}" href="{% url 'procurement:index' %}"><i class="bi bi-database me-1"></i>Данные из 1С</a></li>
+          {% if user.is_superuser %}<li class="nav-item"><a class="nav-link" href="{% url 'admin:auth_user_changelist' %}"><i class="bi bi-people me-1"></i>Пользователи</a></li>{% endif %}
+        </ul>
+        {% if user.is_authenticated %}
+        <div class="dropdown">
+          <button class="btn btn-sm btn-outline-light dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
+            <i class="bi bi-person-circle me-1"></i>{{ user.get_full_name|default:user.username }}
+            <span class="role-pill ms-1 d-none d-sm-inline">{{ user.groups.first.name|default:"—" }}</span>
+          </button>
+          <ul class="dropdown-menu dropdown-menu-end">
+            <li><span class="dropdown-item-text small text-muted">Роль: {{ user.groups.first.name|default:"не назначена" }}</span></li>
+            <li><hr class="dropdown-divider"></li>
+            <li><form method="post" action="{% url 'logout' %}">{% csrf_token %}<button class="dropdown-item"><i class="bi bi-box-arrow-right me-2"></i>Выйти</button></form></li>
+          </ul>
+        </div>
+        {% endif %}
+      </div>
+      {% endwith %}
+    </div>
+  </nav>
+  <main class="container-xl page">
+    {% if messages %}{% for m in messages %}
+      <div class="alert alert-{% if m.tags == 'error' %}danger{% elif m.tags == 'success' %}success{% else %}primary{% endif %} alert-dismissible fade show" role="status">
+        {{ m }}<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Закрыть"></button></div>
+    {% endfor %}{% endif %}
     {% block content %}{% endblock %}
   </main>
-  <div id="loading" role="alert" aria-live="assertive"><div class="box"><div class="spinner"></div>
-    <b id="loading-title">Секунду…</b><p class="note" id="loading-text"></p></div></div>
+{% endblock %}
+  <div id="loading" role="alert" aria-live="assertive"><div class="box"><div class="spinner-border text-primary mb-3" role="status"></div>
+    <div><b id="loading-title">Секунду…</b></div><p class="note mb-0" id="loading-text"></p></div></div>
+  <script src="{% static 'procurement/vendor/bootstrap/bootstrap.bundle.min.js' %}"></script>
   <script>
-    // Любая форма с data-loading показывает понятное окно ожидания
     document.querySelectorAll('form[data-loading]').forEach(f => f.addEventListener('submit', () => {
       document.getElementById('loading-title').textContent = f.dataset.loading;
       document.getElementById('loading-text').textContent = f.dataset.loadingText || '';

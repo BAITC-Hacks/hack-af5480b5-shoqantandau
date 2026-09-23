@@ -1,132 +1,184 @@
 {% extends "procurement/base.html" %}
-{% load procurement_extras %}
+{% load static procurement_extras %}
 {% block content %}
-<div class="head-row">
+<div class="d-flex justify-content-between align-items-start flex-wrap gap-3 mb-2">
   <div>
-    <p class="crumbs"><a href="{% url 'procurement:run_form' %}">Заказы</a></p>
-    <h1>Заказ от {{ run.created_at|date:"d.m.Y, H:i" }}</h1>
+    <nav aria-label="breadcrumb"><ol class="breadcrumb mb-1"><li class="breadcrumb-item"><a href="{% url 'procurement:run_form' %}">Заказы</a></li><li class="breadcrumb-item active">от {{ run.created_at|date:"d.m.Y, H:i" }}</li></ol></nav>
+    <h1 class="mb-0">Заказ от {{ run.created_at|date:"d.m.Y, H:i" }}</h1>
+    <div class="text-muted small">Рассчитал: {% if run.created_by %}{{ run.created_by.get_full_name|default:run.created_by.username }}{% else %}—{% endif %}</div>
   </div>
-  <div>
-    <a class="btn" href="{% url 'procurement:export_run' run.pk %}?supplier={{ active }}">Скачать заказ для 1С (Excel)</a>
-    <p class="note" style="margin:6px 0 0">В файл попадут утверждённые товары: {{ approved|num }}. <a href="{% url 'procurement:export_run' run.pk %}?supplier={{ active }}&scope=draft">Скачать все рекомендации</a></p>
+  {% if can_export %}
+  <div class="text-end">
+    <div class="btn-group">
+      <a class="btn btn-primary" href="{% url 'procurement:export_run' run.pk %}?supplier={{ active }}"><i class="bi bi-file-earmark-excel me-1"></i>Скачать заказ для 1С</a>
+      <button type="button" class="btn btn-primary dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-expanded="false"><span class="visually-hidden">Ещё</span></button>
+      <ul class="dropdown-menu dropdown-menu-end"><li><a class="dropdown-item" href="{% url 'procurement:export_run' run.pk %}?supplier={{ active }}&scope=draft">Все рекомендации (черновик)</a></li></ul>
+    </div>
+    <div class="small text-muted mt-1">В файл попадут утверждённые: <b>{{ approved|num }}</b></div>
   </div>
-</div>
-
-<nav class="tabs" aria-label="Поставщики">
-  {% for k, s in tabs %}<a href="?supplier={{ k }}" class="{% if k == active %}on{% endif %}">{{ s.name }}<span>{{ s.sku_to_order|num }}</span></a>{% endfor %}
-</nav>
-
-<div class="cards">
-  <div class="card"><div class="v">{{ stat.sku_to_order|num }}</div><div class="t">товаров нужно заказать</div></div>
-  <div class="card red"><div class="v">{{ stat.high|num }}</div><div class="t">закончатся раньше, чем придёт поставка</div></div>
-  {% if stat.has_cost %}
-  <div class="card"><div class="v">{{ stat.value_total|money }}</div><div class="t">сумма заказа по себестоимости</div></div>
-  <div class="card green"><div class="v">{{ value_saved|money }}</div><div class="t">не заморожено в лишнем запасе — без очистки данных заказ был бы {{ stat.value_raw|money }}</div></div>
-  {% else %}
-  <div class="card green"><div class="v">{{ qty_saved|num }} шт.</div><div class="t">меньше лишнего запаса, чем без очистки данных ({{ stat.qty_raw_total|num }} → {{ stat.qty_total|num }})</div></div>
   {% endif %}
-  {% if stat.review %}<div class="card orange"><div class="v">{{ stat.review|num }}</div><div class="t">товаров стоит проверить вручную</div></div>{% endif %}
 </div>
 
-<div class="chips">
-  {% for k, label, n in views %}<a class="chip {% if k == view %}on{% endif %}" href="?supplier={{ active }}&view={{ k }}">{{ label }}<span>{{ n|num }}</span></a>{% endfor %}
-  <form class="searchbox" method="get">
-    <input type="hidden" name="supplier" value="{{ active }}"><input type="hidden" name="view" value="{{ view }}">
-    <input type="search" name="q" value="{{ q }}" placeholder="Найти товар: название или код" aria-label="Найти товар">
-    <button class="btn btn-ghost" type="submit">Найти</button>
-  </form>
+<ul class="nav sup-tabs my-3">
+  {% for k, s in tabs %}<li class="nav-item"><a class="nav-link {% if k == active %}active{% endif %}" href="?supplier={{ k }}">{{ s.name }} <span class="opacity-75 fw-normal">{{ s.sku_to_order|num }}</span></a></li>{% endfor %}
+</ul>
+
+<div class="row g-3 mb-3">
+  <div class="col-6 col-lg"><div class="kpi"><i class="bi bi-cart"></i><div class="v">{{ stat.sku_to_order|num }}</div><div class="t">товаров нужно заказать</div></div></div>
+  <div class="col-6 col-lg"><div class="kpi red"><i class="bi bi-alarm"></i><div class="v">{{ stat.high|num }}</div><div class="t">закончатся раньше, чем придёт поставка</div></div></div>
+  {% if stat.has_cost %}
+  <div class="col-6 col-lg"><div class="kpi"><i class="bi bi-cash-stack"></i><div class="v">{{ stat.value_total|money }}</div><div class="t">сумма заказа по себестоимости</div></div></div>
+  <div class="col-6 col-lg"><div class="kpi green"><i class="bi bi-piggy-bank"></i><div class="v">{{ value_saved|money }}</div><div class="t">не заморожено в лишнем запасе (без очистки данных было бы {{ stat.value_raw|money }})</div></div></div>
+  {% else %}
+  <div class="col-6 col-lg"><div class="kpi green"><i class="bi bi-piggy-bank"></i><div class="v">{{ qty_saved|num }} шт.</div><div class="t">меньше лишнего запаса, чем без очистки данных</div></div></div>
+  {% endif %}
+  {% if stat.review %}<div class="col-6 col-lg"><div class="kpi orange"><i class="bi bi-exclamation-triangle"></i><div class="v">{{ stat.review|num }}</div><div class="t">стоит проверить вручную</div></div></div>{% endif %}
+</div>
+
+<div class="toolbar mb-2">
+  <div class="btn-group flex-wrap" role="group" aria-label="Что показать">
+    {% for k, label in views %}<input type="radio" class="btn-check" name="view" id="v-{{ k }}" value="{{ k }}" {% if k == view %}checked{% endif %}><label class="btn btn-outline-primary chip-btn me-1 mb-1" for="v-{{ k }}">{{ label }} <span class="badge text-bg-light ms-1" data-count="{{ k }}"></span></label>{% endfor %}
+  </div>
+  <div class="input-group search ms-auto">
+    <span class="input-group-text bg-white"><i class="bi bi-search"></i></span>
+    <input type="search" class="form-control" id="q" placeholder="Название, код или артикул — ищет сразу" aria-label="Поиск товара">
+  </div>
+  <select class="form-select" id="f-group" style="max-width:200px" aria-label="Группа"><option value="">Все группы</option></select>
 </div>
 
 <form method="post" id="orders-form" data-loading="Сохраняем…">{% csrf_token %}
-<div class="table-wrap">
-<table class="grid orders">
-  <thead><tr>
-    <th><input type="checkbox" id="sel-all" aria-label="Выбрать все на странице"></th>
-    <th>Товар</th><th class="num">На складе</th><th class="num">В пути</th><th>Хватит на</th>
-    <th class="num">Советуем</th><th class="num">Заказать</th>{% if stat.has_cost %}<th class="num">Сумма</th>{% endif %}<th>Статус</th></tr></thead>
-  <tbody>
-  {% for l in page %}
-    <tr class="u-{{ l.urgency }} st-{{ l.status }}">
-      <td><input type="checkbox" name="sel" value="{{ l.pk }}" aria-label="Выбрать {{ l.name }}"></td>
-      <td class="prod">
-        <b>{{ l.name }}</b>
-        <span class="meta">код {{ l.code_1c }}{% if l.article %} · {{ l.article }}{% endif %}</span>
-        {% if l.needs_review %}<span class="badge warn" title="Пометка в 1С или товара давно нет на складе">проверьте вручную</span>{% endif %}
-        <details class="why"><summary>Почему столько?</summary>
-          <div class="why-box">
-            <ul>{% for sent in l.reason|sentences %}<li>{{ sent }}</li>{% endfor %}</ul>
-            <div id="ai-{{ l.pk }}">{% if l.reason_ai %}<p class="ai-text">{{ l.reason_ai }}</p>{% endif %}</div>
-            <div class="why-links">
-              <button type="button" class="link-btn" data-explain="{{ l.pk }}">Объяснить простыми словами</button>
-              <a href="{% url 'procurement:sku_detail' l.supplier l.code_1c %}">График продаж</a>
-              <a href="{% url 'procurement:check' %}?supplier={{ l.supplier }}&code={{ l.code_1c }}">Что будет, если…</a>
-            </div>
-          </div>
-        </details>
-      </td>
-      <td class="num">{{ l.stock|num }}</td>
-      <td class="num">{% if l.in_transit %}{{ l.in_transit|num }}{% else %}—{% endif %}</td>
-      <td><span class="badge {{ l.urgency }}">{{ l.days_of_cover|days }}</span></td>
-      <td class="num rec">{{ l.qty_recommended|num }}</td>
-      <td class="num"><input class="qty-input{% if l.qty_final is not None %} edited{% endif %}" type="number" min="0" step="1"
-            name="qty_{{ l.pk }}" value="{{ l.qty_to_order }}" aria-label="Заказать, {{ l.name }}">
-        {% if l.moq > 1 %}<small class="muted" style="display:block">кратно {{ l.moq|floatformat:0 }}</small>{% endif %}</td>
-      {% if stat.has_cost %}<td class="num">{% if l.value_to_order %}{{ l.value_to_order|num }} ₸{% else %}—{% endif %}</td>{% endif %}
-      <td>{% if l.status == "approved" %}<span class="badge ok">утверждён</span>{% elif l.status == "rejected" %}<span class="badge grey">не заказываем</span>{% else %}<span class="badge grey">ждёт решения</span>{% endif %}</td>
-    </tr>
-  {% empty %}
-    <tr><td colspan="9"><p class="note">Здесь пусто. {% if q %}По запросу «{{ q }}» ничего не нашлось — попробуйте часть названия или кода.{% else %}Выберите другой фильтр выше.{% endif %}</p></td></tr>
-  {% endfor %}
-  </tbody>
-</table>
+<div class="table-card">
+  <div class="table-responsive">
+  <table class="table table-hover align-middle" id="orders">
+    <thead><tr>
+      {% if can_edit %}<th style="width:36px"><input class="form-check-input" type="checkbox" id="sel-all" aria-label="Выбрать все на странице"></th>{% endif %}
+      <th data-sort="name">Товар</th>
+      <th class="num" data-sort="stock" data-dir="desc">На складе</th>
+      <th class="num" data-sort="transit" data-dir="desc">В пути</th>
+      <th data-sort="cover">Хватит на</th>
+      <th class="num" data-sort="demand" data-dir="desc">Продаж в мес.</th>
+      <th class="num" data-sort="rec" data-dir="desc">Советуем</th>
+      <th class="num" data-sort="qty" data-dir="desc">Заказать</th>
+      {% if stat.has_cost %}<th class="num" data-sort="sum" data-dir="desc">Сумма, ₸</th>{% endif %}
+      <th data-sort="status">Статус</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  </div>
+  <div class="table-foot" id="foot"></div>
 </div>
-{% if page.has_other_pages %}
-<p class="pager">
-  {% if page.has_previous %}<a class="btn btn-ghost" href="?supplier={{ active }}&view={{ view }}&q={{ q }}&page={{ page.previous_page_number }}">← Назад</a>{% endif %}
-  <span>Страница {{ page.number }} из {{ page.paginator.num_pages }}</span>
-  {% if page.has_next %}<a class="btn btn-ghost" href="?supplier={{ active }}&view={{ view }}&q={{ q }}&page={{ page.next_page_number }}">Дальше →</a>{% endif %}
-</p>
-{% endif %}
+<div id="hidden-fields"></div>
 
-<div class="actionbar"><div class="actionbar-in">
-  <span class="count" id="sel-count">Отметьте товары галочками</span>
-  <button class="btn btn-ok" name="action" value="approve" data-needs-sel disabled>Утвердить</button>
-  <button class="btn btn-danger-ghost" name="action" value="reject" data-needs-sel disabled>Не заказывать</button>
-  <button class="btn btn-ghost" name="action" value="reset" data-needs-sel disabled>Вернуть в работу</button>
-  <button class="btn btn-ghost" name="action" value="save" id="save-btn" hidden>Сохранить изменённые количества</button>
+{% if can_edit %}
+<div class="actionbar"><div class="inner">
+  <span class="count" id="sel-count">Отметьте товары галочками или измените количество</span>
+  <button class="btn btn-success" name="action" value="approve" data-needs-sel disabled><i class="bi bi-check2-circle me-1"></i>Утвердить</button>
+  <button class="btn btn-outline-danger" name="action" value="reject" data-needs-sel disabled><i class="bi bi-x-circle me-1"></i>Не заказывать</button>
+  <button class="btn btn-outline-secondary" name="action" value="reset" data-needs-sel disabled>Вернуть в работу</button>
+  <button class="btn btn-outline-primary" name="action" value="save" id="save-btn" hidden><i class="bi bi-save me-1"></i>Сохранить количества</button>
 </div></div>
+{% endif %}
 </form>
+{{ rows|json_script:"rows-data" }}
 {% endblock %}
 
 {% block scripts %}
+<script src="{% static 'procurement/table.js' %}"></script>
 <script>
-  const form = document.getElementById('orders-form');
-  const csrf = form.querySelector('input[name=csrfmiddlewaretoken]').value;
-  const boxes = () => [...form.querySelectorAll('input[name=sel]')];
+  const CAN_EDIT = {{ can_edit|yesno:"true,false" }}, HAS_COST = {{ stat.has_cost|yesno:"true,false" }};
+  const SUP = "{{ active }}";
+  const data = JSON.parse(document.getElementById('rows-data').textContent);
+  const selected = new Set(), edits = {};
+  const urgText = {high: 'срочно', medium: 'заказать сейчас', low: 'запас есть'};
+  const statusHtml = s => s === 'approved' ? '<span class="pill ok"><i class="bi bi-check2"></i> утверждён</span>'
+    : s === 'rejected' ? '<span class="pill grey">не заказываем</span>' : '<span class="pill grey">ждёт решения</span>';
+  const VIEWS = {
+    order: r => r.rec > 0, urgent: r => r.rec > 0 && r.urg === 'high', review: r => r.review,
+    approved: r => r.status === 'approved', all: r => true,
+  };
+  document.querySelectorAll('[data-count]').forEach(b => b.textContent = data.filter(VIEWS[b.dataset.count]).length.toLocaleString('ru'));
+  const groups = [...new Set(data.map(r => r.group))].sort();
+  const gsel = document.getElementById('f-group');
+  groups.forEach(g => gsel.insertAdjacentHTML('beforeend', `<option>${esc(g)}</option>`));
+
+  const t = new SmartTable({
+    data, table: '#orders', foot: '#foot', search: '#q', searchKeys: ['name', 'code', 'article'],
+    rowHtml: r => {
+      const q = edits[r.id] ?? r.qty;
+      return `<tr class="u-${r.urg} st-${r.status}" data-id="${r.id}">
+        ${CAN_EDIT ? `<td><input class="form-check-input sel" type="checkbox" value="${r.id}" ${selected.has(r.id) ? 'checked' : ''} aria-label="Выбрать"></td>` : ''}
+        <td><div class="prod-name">${esc(r.name)}</div>
+          <div class="prod-meta">код ${esc(r.code)}${r.article ? ' · ' + esc(r.article) : ''} · группа ${esc(r.group)}
+          ${r.review ? ' <span class="pill warn ms-1">проверьте вручную</span>' : ''}</div>
+          <button type="button" class="btn btn-link btn-sm p-0 why-btn" data-id="${r.id}"><i class="bi bi-chevron-right"></i> Почему столько?</button></td>
+        <td class="num">${fmt(r.stock)}</td><td class="num">${r.transit ? fmt(r.transit) : '—'}</td>
+        <td><span class="pill ${r.urg}" title="${urgText[r.urg] || ''}">${daysText(r.cover)}</span></td>
+        <td class="num">${r.demand.toLocaleString('ru')}</td>
+        <td class="num rec">${fmt(r.rec)}</td>
+        <td class="num">${CAN_EDIT ? `<input class="form-control qty-input ${r.edited || edits[r.id] != null ? 'edited' : ''}" type="number" min="0" step="1" value="${q}" data-id="${r.id}" aria-label="Заказать">` : `<b>${fmt(q)}</b>`}
+          ${r.moq > 1 ? `<div class="small text-muted">кратно ${r.moq}</div>` : ''}</td>
+        ${HAS_COST ? `<td class="num">${r.sum != null ? fmt(r.sum) : '—'}</td>` : ''}
+        <td>${statusHtml(r.status)}</td></tr>`;
+    },
+  });
+  const setView = v => t.setFilter('view', VIEWS[v]);
+  document.querySelectorAll('input[name=view]').forEach(i => i.addEventListener('change', () => setView(i.value)));
+  setView(document.querySelector('input[name=view]:checked').value);
+  gsel.addEventListener('change', () => t.setFilter('group', gsel.value ? r => r.group === gsel.value : null));
+
+  // выбор и правка — состояние хранится в JS, поэтому не теряется при переходе по страницам и поиске
   function updateSel() {
-    const n = boxes().filter(b => b.checked).length;
-    document.getElementById('sel-count').textContent = n ? `Выбрано: ${n}` : 'Отметьте товары галочками';
-    form.querySelectorAll('[data-needs-sel]').forEach(b => b.disabled = !n);
+    if (!CAN_EDIT) return;
+    const n = selected.size, e = Object.keys(edits).length;
+    document.getElementById('sel-count').textContent = n ? `Выбрано: ${n}` + (e ? ` · изменено количеств: ${e}` : '') : 'Отметьте товары галочками или измените количество';
+    document.querySelectorAll('[data-needs-sel]').forEach(b => b.disabled = !n);
+    document.getElementById('save-btn').hidden = !e;
   }
-  document.getElementById('sel-all')?.addEventListener('change', e => { boxes().forEach(b => b.checked = e.target.checked); updateSel(); });
-  form.addEventListener('change', e => { if (e.target.name === 'sel') updateSel(); });
-  form.querySelectorAll('.qty-input').forEach(inp => inp.addEventListener('input', () => {
-    inp.classList.add('edited');
-    const row = inp.closest('tr').querySelector('input[name=sel]'); if (row) { row.checked = true; updateSel(); }
-    document.getElementById('save-btn').hidden = false;
-  }));
-  document.querySelectorAll('[data-explain]').forEach(btn => btn.addEventListener('click', async () => {
-    const id = btn.dataset.explain, box = document.getElementById('ai-' + id);
-    btn.disabled = true; btn.textContent = 'Формулирую…';
+  const tbody = document.querySelector('#orders tbody');
+  tbody.addEventListener('change', e => {
+    if (e.target.classList.contains('sel')) { const id = +e.target.value; e.target.checked ? selected.add(id) : selected.delete(id); updateSel(); }
+  });
+  tbody.addEventListener('input', e => {
+    if (!e.target.classList.contains('qty-input')) return;
+    const id = +e.target.dataset.id; edits[id] = e.target.value; e.target.classList.add('edited');
+    selected.add(id); const cb = e.target.closest('tr').querySelector('.sel'); if (cb) cb.checked = true; updateSel();
+  });
+  document.getElementById('sel-all')?.addEventListener('change', e => {
+    tbody.querySelectorAll('.sel').forEach(cb => { cb.checked = e.target.checked; e.target.checked ? selected.add(+cb.value) : selected.delete(+cb.value); });
+    updateSel();
+  });
+  document.getElementById('orders-form').addEventListener('submit', () => {
+    const box = document.getElementById('hidden-fields'); box.innerHTML = '';
+    selected.forEach(id => box.insertAdjacentHTML('beforeend', `<input type="hidden" name="sel" value="${id}">`));
+    Object.entries(edits).forEach(([id, v]) => box.insertAdjacentHTML('beforeend', `<input type="hidden" name="qty_${id}" value="${esc(v)}">`));
+  });
+
+  // «Почему столько?» — подгружается по запросу
+  const csrf = document.querySelector('#orders-form input[name=csrfmiddlewaretoken]').value;
+  tbody.addEventListener('click', async e => {
+    const btn = e.target.closest('.why-btn'); if (!btn) return;
+    const tr = btn.closest('tr'), next = tr.nextElementSibling;
+    if (next && next.classList.contains('why-row')) { next.remove(); btn.querySelector('i').className = 'bi bi-chevron-right'; return; }
+    btn.querySelector('i').className = 'bi bi-chevron-down';
+    const cols = tr.children.length;
+    tr.insertAdjacentHTML('afterend', `<tr class="why-row"><td colspan="${cols}"><div class="why-box"><div class="spinner-border spinner-border-sm text-primary"></div></div></td></tr>`);
+    const box = tr.nextElementSibling.querySelector('.why-box');
+    const j = await (await fetch(`/line/${btn.dataset.id}/reason/`)).json();
+    box.innerHTML = `<ul>${j.sentences.map(s => `<li>${esc(s)}</li>`).join('')}</ul>
+      ${j.who ? `<div class="small text-muted mt-2"><i class="bi bi-person-check me-1"></i>${esc(j.who)}</div>` : ''}
+      <div class="ai-slot">${j.ai ? `<p class="ai-text">${esc(j.ai)}</p>` : ''}</div>
+      <div class="why-links"><button type="button" class="btn btn-link btn-sm p-0 explain" data-id="${btn.dataset.id}"><i class="bi bi-chat-square-text me-1"></i>Объяснить простыми словами</button>
+        <a href="/sku/${j.supplier}/${encodeURIComponent(j.code)}/"><i class="bi bi-graph-up me-1"></i>График продаж</a>
+        <a href="/check/?supplier=${j.supplier}&code=${encodeURIComponent(j.code)}"><i class="bi bi-lightbulb me-1"></i>Что будет, если…</a></div>`;
+  });
+  tbody.addEventListener('click', async e => {
+    const b = e.target.closest('.explain'); if (!b) return;
+    b.disabled = true; b.textContent = 'Формулирую…';
     try {
-      const r = await fetch(`/line/${id}/explain/`, {method: 'POST', headers: {'X-CSRFToken': csrf}});
-      const j = await r.json();
-      box.innerHTML = '';
-      const p = document.createElement('p'); p.className = 'ai-text'; p.textContent = j.text;
-      box.append(p);
-      btn.textContent = 'Сформулировать ещё раз';
-    } catch (e) { btn.textContent = 'Не получилось — попробовать снова'; }
-    btn.disabled = false;
-  }));
+      const j = await (await fetch(`/line/${b.dataset.id}/explain/`, {method: 'POST', headers: {'X-CSRFToken': csrf}})).json();
+      b.closest('.why-box').querySelector('.ai-slot').innerHTML = `<p class="ai-text">${esc(j.text)}</p>`;
+      b.textContent = 'Сформулировать ещё раз';
+    } catch (err) { b.textContent = 'Не получилось — попробовать снова'; }
+    b.disabled = false;
+  });
 </script>
 {% endblock %}

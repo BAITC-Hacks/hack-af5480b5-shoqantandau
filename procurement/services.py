@@ -22,10 +22,11 @@ def _clean(v):
     return v
 
 
-def run_calculation(params: engine.Params, suppliers: list[str] | None = None) -> CalculationRun:
+def run_calculation(params: engine.Params, suppliers: list[str] | None = None, user=None) -> CalculationRun:
     keys = suppliers or list(constants.SUPPLIERS)
     run = CalculationRun.objects.create(supplier=",".join(keys), category=params.category,
-                                        params=_clean(params.to_dict()))
+                                        params=_clean(params.to_dict()),
+                                        created_by=user if user is not None and user.is_authenticated else None)
     stats, lines = {}, []
     for key in keys:
         data = loaders.get_supplier(key)

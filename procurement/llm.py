@@ -51,6 +51,9 @@ def _payload(line) -> dict:
         "исключённые_разовые_продажи": [{"накладная": o["doc"], "дата": o["date"], "кол_во": o["qty"]}
                                          for o in d.get("one_offs", []) if o.get("in_window")],
         "месяцы_без_товара": d.get("stockout_months", []),
+        "сглаженные_всплески_месяцев": [{"месяц": x["label"], "было": round(x["was"]), "стало": round(x["now"])}
+                                        for x in d.get("spikes", []) if x.get("in_window")],
+        "требует_проверки": d.get("flags", []),
         "рекомендация_без_очистки_данных": d.get("qty_raw"),
         "техническое_обоснование": line.reason,
     }
@@ -61,7 +64,12 @@ def template_explanation(line) -> str:
     d = line.details or {}
     unit = d.get("unit", "шт")
     parts = []
-    if line.qty_to_order > 0:
+    if d.get("flags"):
+        parts.append("Проверьте позицию: " + "; ".join(d["flags"]) + ".")
+    if line.qty_to_order == 0 and "Расчётно нужно" in (line.reason or ""):
+        parts.append("Автоматически заказ не предлагается из-за пометки в названии, хотя расчёт показывает потребность — "
+                     "если позиция ещё закупается, укажите количество вручную.")
+    elif line.qty_to_order > 0:
         cover = "" if (line.days_of_cover or 0) >= 9999 else f" Текущего остатка хватит примерно на {line.days_of_cover:.0f} дн."
         parts.append(f"Предлагаем заказать {line.qty_to_order} {unit}: в среднем уходит {line.regular_demand:.1f} {unit} "
                      f"в месяц, а до следующей поставки и следующего заказа нужно около {line.forecast + line.safety_stock:.0f} {unit} "
@@ -74,11 +82,14 @@ def template_explanation(line) -> str:
         big = max(oo, key=lambda o: o["qty"])
         parts.append(f"Разовая крупная продажа ({big['qty']:.0f} {unit}, накладная {big['doc']} от {big['date']}) "
                      f"не считается регулярным спросом.")
+    sp = [x for x in d.get("spikes", []) if x.get("in_window")]
+    if sp:
+        parts.append(f"Нетипичный всплеск продаж ({', '.join(x['label'] for x in sp[:3])}) сглажен до обычного уровня.")
     if d.get("stockout_months"):
         parts.append(f"Товара не было на складе ({', '.join(d['stockout_months'])}) — продажи тогда были занижены, "
                      f"поэтому спрос за эти месяцы восстановлен.")
     raw = d.get("qty_raw")
-    if raw is not None and raw != line.qty_recommended and (oo or d.get("stockout_months")):
+    if raw is not None and raw != line.qty_recommended and (oo or sp or d.get("stockout_months")):
         parts.append(f"Без этих поправок расчёт дал бы {raw} {unit}.")
     return " ".join(parts)
 

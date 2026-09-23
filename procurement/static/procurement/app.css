@@ -106,3 +106,5 @@ h2 small { font-size: 14px; font-weight: 400; }
 .lg-line { height: 2px; background: var(--ink); }
 .link-btn { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-size: 13px; cursor: pointer; text-decoration: underline; }
 .ai-text { color: var(--ink) !important; background: #eef2fb; border-left: 3px solid var(--accent); padding: 6px 10px; }
+.tag.warn { background: #fdf1e3; color: var(--medium); }
+form.busy { opacity: .6; pointer-events: none; }

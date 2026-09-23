@@ -24,6 +24,7 @@
       <div><dt>Накладных</dt><dd>{{ s.summary.docs }}</dd></div>
       <div><dt>Период продаж</dt><dd>{{ s.summary.date_from|date:"d.m.Y" }} – {{ s.summary.date_to|date:"d.m.Y" }}</dd></div>
       <div><dt>В пути</dt><dd>{{ s.summary.in_transit_sku }} арт. / {{ s.summary.in_transit_qty|floatformat:0 }} ед.</dd></div>
+      {% if s.summary.marked %}<div><dt>С пометкой «!!!»</dt><dd>{{ s.summary.marked }} арт.</dd></div>{% endif %}
       <div><dt>Срок поставки</dt><dd>{{ s.summary.lead_time_days }} дн. <small>({{ s.summary.lead_time_source }})</small></dd></div>
     </dl>
     {% for w in s.warnings %}<p class="note">{{ w }}</p>{% endfor %}

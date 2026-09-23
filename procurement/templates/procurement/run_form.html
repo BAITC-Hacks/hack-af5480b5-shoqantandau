@@ -7,15 +7,24 @@
   <label>Поставщик
     <select name="supplier">
       <option value="">Все поставщики</option>
-      {% for k, s in suppliers.items %}<option value="{{ k }}">{{ s.name }}</option>{% endfor %}
+      {% for k, name, lead in suppliers %}<option value="{{ k }}">{{ name }}</option>{% endfor %}
     </select>
   </label>
-  <label>Группа товаров <small>(начало кода 1С, например 0302)</small>
-    <input name="category" placeholder="все">
+  <label>Группа товаров <small>(группа 1С — первые 4 цифры кода)</small>
+    {% if groups %}
+    <select name="category">
+      <option value="">Все группы</option>
+      {% for g in groups %}<option value="{{ g.code }}">{{ g.code }} — {{ g.n }} арт., напр. {{ g.example }}</option>{% endfor %}
+    </select>
+    {% else %}
+    <input name="category" placeholder="все (например 0302)">
+    {% endif %}
   </label>
-  <label>Срок поставки, дн. <small>(пусто — из данных)</small>
-    <input name="lead_time_days" type="number" min="1" placeholder="авто">
+  {% for k, name, lead in suppliers %}
+  <label>Срок поставки {{ name }}, дн. <small>(пусто — {% if lead %}{{ lead }} дн. из справочника/данных{% else %}из данных{% endif %})</small>
+    <input name="lead_{{ k }}" type="number" min="1" placeholder="{% if lead %}{{ lead }}{% else %}авто{% endif %}">
   </label>
+  {% endfor %}
   <label>Период между заказами, дн.
     <input name="review_days" type="number" min="1" value="{{ review_days }}">
   </label>
@@ -29,8 +38,8 @@
     <label class="check"><input type="checkbox" name="use_seasonality" checked> сезонность</label>
     <label class="check"><input type="checkbox" name="use_growth" checked> рост спроса</label>
   </fieldset>
-  <div><button class="btn" type="submit">Рассчитать заказы</button>
-    <p class="note">Расчёт по всем поставщикам занимает 10–30 секунд.</p></div>
+  <div><button class="btn" type="submit" onclick="this.textContent='Считаю…'; this.form.classList.add('busy')">Рассчитать заказы</button>
+    <p class="note">{% if cached %}Расчёт по всем поставщикам занимает 10–20 секунд.{% else %}Первый запуск — до минуты: разбираются выгрузки 1С (~250 тыс. строк). Дальше быстрее.{% endif %}</p></div>
 </form>
 
 {% if runs %}

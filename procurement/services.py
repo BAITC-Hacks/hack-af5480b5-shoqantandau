@@ -37,7 +37,8 @@ def run_calculation(params: engine.Params, suppliers: list[str] | None = None) -
             "high": int((to_order["urgency"] == "high").sum()) if len(to_order) else 0,
             "one_offs": int((df["one_off_removed"] > 0).sum()) if len(df) else 0,
             "stockouts": int((df["stockout_added"] > 0).sum()) if len(df) else 0,
-            "lead_time_days": int(params.lead_time_days or data.lead_time_days),
+            "lead_time_days": int(params.lead_times.get(key) or params.lead_time_days or data.lead_time_days),
+            "review": int(df["needs_review"].sum()) if len(df) else 0,
             "warnings": data.warnings,
         }
         for r in df.itertuples(index=False):
@@ -46,7 +47,7 @@ def run_calculation(params: engine.Params, suppliers: list[str] | None = None) -
                 category=str(r.category), stock=r.stock, in_transit=r.in_transit,
                 regular_demand=r.regular_demand, forecast=r.forecast, safety_stock=r.safety_stock,
                 moq=r.moq, qty_recommended=int(r.qty_recommended), urgency=r.urgency,
-                days_of_cover=float(r.days_of_cover), reason=r.reason,
+                days_of_cover=float(r.days_of_cover), reason=r.reason, needs_review=bool(r.needs_review),
                 details=_clean({**r.details, "qty_raw": int(r.qty_raw), "unit": r.unit,
                                 "one_off_removed": r.one_off_removed, "stockout_added": r.stockout_added}),
             ))

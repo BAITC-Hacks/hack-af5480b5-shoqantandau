@@ -1,5 +1,6 @@
 import shutil
 
+import numpy as np
 import pandas as pd
 from django.contrib import messages
 from django.http import Http404
@@ -119,8 +120,9 @@ def _num(v, cast=float):
 def run_form(request):
     if request.method == "POST":
         f = request.POST
+        lead_times = {k: v for k in constants.SUPPLIERS if (v := _num(f.get(f"lead_{k}"), int))}
         params = engine.Params(
-            lead_time_days=_num(f.get("lead_time_days"), int),
+            lead_times=lead_times,
             review_days=_num(f.get("review_days"), int) or constants.REVIEW_PERIOD_DAYS,
             growth_plan_pct=_num(f.get("growth_plan_pct")),
             category=f.get("category", "").strip(),
@@ -132,8 +134,24 @@ def run_form(request):
         sup = f.get("supplier") or ""
         run = services.run_calculation(params, [sup] if sup in constants.SUPPLIERS else None)
         return redirect("procurement:run_detail", run.pk)
+    # группы товаров для выбора — только если данные уже разобраны (иначе страница открывалась бы 20–30 с)
+    groups, cached = [], all((loaders.CACHE_DIR / f"{k}.pkl").exists() for k in constants.SUPPLIERS)
+    leads = {k: v.get("lead_time_days") for k, v in constants.SUPPLIERS.items()}
+    if cached:
+        seen = {}
+        for k in constants.SUPPLIERS:
+            data = loaders.get_supplier(k)
+            leads[k] = data.lead_time_days
+            for cat, g in data.items.groupby("category"):
+                e = seen.setdefault(cat, {"code": cat, "n": 0, "example": g["name"].iloc[0][:40], "sup": set()})
+                e["n"] += len(g)
+                e["sup"].add(data.name)
+        groups = sorted(seen.values(), key=lambda e: -e["n"])
+        for e in groups:
+            e["sup"] = ", ".join(sorted(e["sup"]))
     return render(request, "procurement/run_form.html", {
-        "suppliers": constants.SUPPLIERS, "review_days": constants.REVIEW_PERIOD_DAYS,
+        "suppliers": [(k, v["name"], leads[k]) for k, v in constants.SUPPLIERS.items()],
+        "review_days": constants.REVIEW_PERIOD_DAYS, "groups": groups, "cached": cached,
         "runs": CalculationRun.objects.all()[:10],
     })
 
@@ -186,7 +204,9 @@ def run_detail(request, pk):
     if urgency:
         lines = lines.filter(urgency=urgency)
     status = request.GET.get("status", "")
-    if status:
+    if status == "review":
+        lines = run.lines.filter(supplier=active, needs_review=True)
+    elif status:
         lines = lines.filter(status=status)
     if q:
         from django.db.models import Q
@@ -282,6 +302,14 @@ def check_scenarios(request):
     growth = _num(g.get("growth")) if g.get("growth") not in (None, "") else 30.0
     last_month = (pd.Period(data.data_date, freq="M") - 2).start_time + pd.Timedelta(days=10)
     test_order = [{"code": code, "qty": big_qty, "date": str(last_month.date()), "doc": "ТЕСТ-РАЗОВЫЙ"}]
+    test_month = [{**test_order[0], "doc": "ТЕСТ-МЕСЯЦ", "monthly_only": True}]
+    # группа с самым непохожим сезонным профилем — чтобы показать влияние категории товара
+    profiles = engine.category_profiles(data, pd.Period(data.data_date, freq="M") - 1)
+    my_cat = str(item["category"])
+    other_cat = None
+    if my_cat in profiles and len(profiles) > 1:
+        other_cat = max((c for c in profiles if c != my_cat),
+                        key=lambda c: float(np.abs(profiles[c][0] - profiles[my_cat][0]).sum()))
 
     scen = [
         ("base", "Базовый расчёт", "Все данные как есть", {}),
@@ -289,11 +317,17 @@ def check_scenarios(request):
          {"test_orders": test_order}),
         ("oneoff_raw", f"+ разовая продажа {big_qty:.0f} шт., без очистки", "Для сравнения: так посчитал бы Excel по сырым продажам",
          {"test_orders": test_order, "use_outliers": False}),
+        ("spike", f"+ {big_qty:.0f} шт. только в месячном отчёте", "Требование 4: всплеск без накладной тоже сглаживается",
+         {"test_orders": test_month}),
         ("transit", f"+ {transit_add:.0f} в пути", "Требование 1: товар в пути уменьшает заказ",
          {"overrides": {code: {"in_transit": float(item["in_transit"]) + transit_add}}}),
         ("stock", f"Остаток = {stock_val:.0f}", "Требование 1: остаток уменьшает заказ",
          {"overrides": {code: {"stock_now": stock_val}}}),
         ("growth", f"Плановый прирост {growth:+.0f}% г/г", "Требование 1: прогноз по приросту", {"growth_plan_pct": growth}),
+    ] + ([
+        ("category", f"Группа товаров {my_cat} → {other_cat}", "Требование 1: категория влияет через сезонность и рост группы",
+         {"overrides": {code: {"category": other_cat}}}),
+    ] if other_cat else []) + [
         ("no_stockout", "Без учёта дефицита", "Требование 3: без восстановления упущенного спроса", {"use_stockout": False}),
         ("no_season", "Без сезонности", "Требование 2: сезонный индекс против среднего", {"use_seasonality": False}),
     ]

@@ -16,6 +16,7 @@
   <div><dt>Срок поставки</dt><dd>{{ stat.lead_time_days }} дн.</dd></div>
   <div><dt>Найдено разовых заказов</dt><dd>{{ stat.one_offs }} арт.</dd></div>
   <div><dt>Учтён дефицит</dt><dd>{{ stat.stockouts }} арт.</dd></div>
+  <div><dt>Требуют проверки</dt><dd><a href="?supplier={{ active }}&status=review">{{ stat.review|default:0 }} арт.</a></dd></div>
 </dl>
 
 <form class="filters" method="get">
@@ -29,7 +30,8 @@
   <select name="status"><option value="">Любой статус</option>
     <option value="new" {% if status == "new" %}selected{% endif %}>Новые</option>
     <option value="approved" {% if status == "approved" %}selected{% endif %}>Утверждённые</option>
-    <option value="rejected" {% if status == "rejected" %}selected{% endif %}>Отклонённые</option></select>
+    <option value="rejected" {% if status == "rejected" %}selected{% endif %}>Отклонённые</option>
+    <option value="review" {% if status == "review" %}selected{% endif %}>Требуют проверки ({{ stat.review }})</option></select>
   <input type="search" name="q" value="{{ q }}" placeholder="Код, артикул, название">
   <button class="btn btn-ghost" type="submit">Показать</button>
   <span class="spacer"></span>
@@ -56,7 +58,7 @@
       <td><input type="checkbox" name="sel" value="{{ l.pk }}" aria-label="Отметить {{ l.code_1c }}"></td>
       <td><span class="urg urg-{{ l.urgency }}">{{ l.get_urgency_display }}</span></td>
       <td><a href="{% url 'procurement:sku_detail' l.supplier l.code_1c %}">{{ l.code_1c }}</a><br><small>{{ l.article }}</small></td>
-      <td>{{ l.name }}
+      <td>{{ l.name }}{% if l.needs_review %} <span class="tag warn" title="Пометка в 1С или долгое отсутствие товара">проверить</span>{% endif %}
         <details class="why"><summary>Почему столько</summary><p>{{ l.reason }}</p>
           <div class="ai-box" id="ai-{{ l.pk }}">{% if l.reason_ai %}<p class="ai-text">{{ l.reason_ai }}</p>{% endif %}</div>
           <button type="button" class="link-btn" data-explain="{{ l.pk }}">Объяснить простыми словами{% if ai_label %} (AI){% endif %}</button>

@@ -30,7 +30,7 @@ MONTHS_RU = {"янв": 1, "фев": 2, "мар": 3, "апр": 4, "май": 5, "�
 MONTHS_GEN = {"января": 1, "февраля": 2, "марта": 3, "апреля": 4, "мая": 5, "июня": 6,
               "июля": 7, "августа": 8, "сентября": 9, "октября": 10, "ноября": 11, "декабря": 12}
 
-CACHE_VERSION = 3
+CACHE_VERSION = 4
 
 
 @dataclass
@@ -46,8 +46,19 @@ class SupplierData:
     warnings: list[str] = field(default_factory=list)
 
     @property
+    def lead_time_source(self) -> str:
+        if constants.SUPPLIERS.get(self.key, {}).get("lead_time_days"):
+            return "справочник поставщиков (constants.py)"
+        if not self.orders.empty and self.orders["lead_days"].notna().any():
+            return "по заказам в пути"
+        return "по умолчанию"
+
+    @property
     def lead_time_days(self) -> int:
-        """Срок поставки: медиана по заказам в пути, иначе значение по умолчанию."""
+        """Срок поставки: справочник поставщиков, иначе медиана по заказам в пути, иначе по умолчанию."""
+        fixed = constants.SUPPLIERS.get(self.key, {}).get("lead_time_days")
+        if fixed:
+            return int(fixed)
         o = self.orders
         if not o.empty and o["lead_days"].notna().any():
             # медиана, взвешенная по количеству: крупные поставки важнее мелких довозов
@@ -70,7 +81,8 @@ class SupplierData:
             "in_transit_sku": int((self.items["in_transit"] > 0).sum()),
             "in_transit_qty": float(self.items["in_transit"].sum()),
             "lead_time_days": self.lead_time_days,
-            "lead_time_source": "по заказам в пути" if not self.orders.empty else "по умолчанию",
+            "lead_time_source": self.lead_time_source,
+            "marked": int(self.items["marked"].sum()) if "marked" in self.items else 0,
             "data_date": self.data_date,
         }
 
@@ -315,6 +327,7 @@ def load_supplier(key: str, directory: Path | None = None) -> SupplierData:
     items["article"] = art[~art.index.duplicated()].reindex(codes).fillna("")
     items["unit"] = units.set_index("code")["unit"].reindex(codes).fillna("шт")
     items["category"] = [_category_from_code(c) for c in codes]
+    items["marked"] = items["name"].str.contains(constants.DISCONTINUED_MARK, regex=False)
     if "abc_class" in extra:
         abc = pd.to_numeric(extra.set_index("code")["abc_class"], errors="coerce").reindex(codes)
         items["abc_class"] = abc.map(lambda v: "" if pd.isna(v) else str(int(v)))
@@ -330,10 +343,11 @@ def load_supplier(key: str, directory: Path | None = None) -> SupplierData:
         stock_source = "свободный остаток из отчёта закупщика"
     else:
         items["stock_now"] = np.nan
-        stock_source = "начальный остаток текущего месяца минус продажи с начала месяца"
+        stock_source = "начальный остаток текущего месяца минус продажи с начала месяца по отчёту 1С"
     cur = pd.Period(data_date, freq="M")
     open_cur = stock_m[stock_m["month"] == cur].set_index("code")["stock_open"]
-    sold_cur = tx[tx["date"].dt.to_period("M") == cur].groupby("code")["qty"].sum()
+    # продажи текущего месяца — из того же месячного отчёта 1С, что и остатки (накладные с ним расходятся)
+    sold_cur = sales_m[sales_m["month"] == cur].groupby("code")["sales_1c"].sum()
     approx = (open_cur.reindex(codes).fillna(0) - sold_cur.reindex(codes).fillna(0)).clip(lower=0)
     items["stock_now"] = items["stock_now"].fillna(approx)
     warnings.append(f"Текущий остаток: {stock_source}.")
@@ -349,8 +363,14 @@ def load_supplier(key: str, directory: Path | None = None) -> SupplierData:
             f"на {abs(tx_total / m_total - 1):.0%}. Спрос берётся из месячного отчёта, "
             f"построчные данные — только для поиска разовых крупных заказов.")
 
-    if orders.empty:
+    if not sup.get("lead_time_days") and orders.empty:
         warnings.append(f"Срок поставки не выводится из данных — используется {constants.DEFAULT_LEAD_TIME_DAYS} дн.")
+    if sup.get("lead_time_days"):
+        warnings.append(f"Срок поставки {sup['lead_time_days']} дн. — из справочника поставщиков (constants.py).")
+    n_marked = int(items["marked"].sum())
+    if n_marked:
+        warnings.append(f"{n_marked} арт. с пометкой «{constants.DISCONTINUED_MARK}» в названии — похоже на вывод из "
+                        f"ассортимента: упущенный спрос для них не восстанавливается, позиции помечаются «проверить».")
     if tx.empty:
         warnings.append("Нет построчных продаж — разовые заказы не выявляются.")
 

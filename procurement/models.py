@@ -45,6 +45,7 @@ class OrderLine(models.Model):
     reason_ai = models.TextField("Обоснование (AI)", blank=True)
     details = models.JSONField("Детали расчёта", default=dict)
     status = models.CharField("Статус", max_length=16, choices=STATUS_CHOICES, default="new")
+    needs_review = models.BooleanField("Требует проверки", default=False)
 
     class Meta:
         ordering = ["supplier", "-days_of_cover"]

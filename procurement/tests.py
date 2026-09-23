@@ -31,7 +31,9 @@ def make_data(skus: dict, season: pd.DataFrame = FLAT_SEASON) -> SupplierData:
                                   "code": code, "name": code, "warehouse": "Алматы", "qty": q / 4})
         for d, doc, q in s.get("lines", []):
             trows.append({"date": pd.Timestamp(d), "doc": doc, "code": code, "name": code, "warehouse": "Алматы", "qty": q})
-        irows.append({"code": code, "name": f"Товар {code}", "article": code, "unit": "шт", "category": "0302",
+        name = s.get("name", f"Товар {code}")
+        irows.append({"code": code, "name": name, "article": code, "unit": "шт", "category": s.get("category", "0302"),
+                      "marked": "!!!" in name,
                       "abc_class": "", "moq": s.get("moq", 1), "in_transit": s.get("in_transit", 0.0),
                       "next_arrival": pd.Timestamp("2026-10-01") if s.get("in_transit") else pd.NaT,
                       "stock_now": s.get("stock_now", 10.0)})
@@ -82,6 +84,21 @@ class MustHave1AllSourcesUsed(SimpleTestCase):
     def test_category_filter(self):
         self.assertTrue(calculate(self.data, Params(category="9999")).empty)
         self.assertFalse(calculate(self.data, Params(category="0302")).empty)
+
+
+class MustHave1CategoryMatters(SimpleTestCase):
+    """Группа товаров участвует в расчёте: смена группы меняет сезонность и количество."""
+
+    def test_category_changes_result(self):
+        pattern = [0.5, 0.5, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 1.8, 0.5, 0.3]  # пик осенью
+        skus = {f"F{i}": {"monthly": [30.0] * 33, "category": "1111"} for i in range(6)}
+        skus.update({f"S{i}": {"monthly": [30.0 * pattern[p.month - 1] for p in MONTHS], "category": "2222"} for i in range(6)})
+        skus["A"] = {"monthly": [8.0] * 33, "category": "1111", "stock_now": 0}  # мало истории для своей сезонности
+        data = make_data(skus)
+        p = dict(lead_time_days=20, review_days=20, use_growth=False, codes=["A"])
+        flat = qty(calculate(data, Params(**p)), "A")
+        moved = qty(calculate(data, Params(**p, overrides={"A": {"category": "2222"}})), "A")
+        self.assertGreater(moved, flat)
 
 
 class MustHave2Seasonality(SimpleTestCase):
@@ -138,6 +155,36 @@ class MustHave4OneOffOrders(SimpleTestCase):
         self.assertLessEqual(abs(clean["qty_recommended"] - base), max(2, 0.1 * base))
         self.assertGreater(raw["qty_recommended"], base * 2)
         self.assertIn("ТЕСТ-1", clean["reason"])
+
+
+    def test_spike_only_in_monthly_report_capped(self):
+        """Эксперт может поднять продажи месяца в отчёте 1С, не добавляя накладную."""
+        data = make_data({"C": {"monthly": [20.0] * 33, "stock_now": 5}})
+        base = qty(calculate(data, Params(lead_time_days=30)), "C")
+        spike = [{"code": "C", "qty": 2000, "date": "2026-06-15", "doc": "ТЕСТ-2", "monthly_only": True}]
+        r = row(calculate(data, Params(lead_time_days=30, test_orders=spike)), "C")
+        self.assertLessEqual(abs(r["qty_recommended"] - base), max(3, 0.15 * base))
+        self.assertIn("Сглажены всплески", r["reason"])
+
+
+class StockoutEdgeCases(SimpleTestCase):
+    """Долгое отсутствие товара и пометка «!!!» — спрос не выдумываем, позицию помечаем."""
+
+    def test_long_stockout_not_restored(self):
+        sales = [30.0] * 26 + [0.0] * 7
+        stock = [100.0] * 26 + [0.0] * 7
+        data = make_data({"D": {"monthly": sales, "stock": stock, "stock_now": 0}})
+        r = row(calculate(data, Params(lead_time_days=30)), "D")
+        self.assertTrue(r["needs_review"])
+        self.assertEqual(r["stockout_added"], 0)
+        self.assertIn("подряд", r["reason"])
+
+    def test_marked_item_not_proposed(self):
+        data = make_data({"E": {"monthly": [30.0] * 33, "stock_now": 0, "name": "Розетка Прима (96) !!!"}})
+        r = row(calculate(data, Params(lead_time_days=30)), "E")
+        self.assertEqual(r["qty_recommended"], 0)
+        self.assertTrue(r["needs_review"])
+        self.assertIn("Расчётно нужно", r["reason"])
 
 
 class MustHave5GroupedWithReasons(SimpleTestCase):

@@ -16,10 +16,11 @@ ALLOWED_HOSTS = ["*"]
 # --- Данные ---
 DATA_DIR = BASE_DIR / "data" / "demo"
 
-# Поставщики и их файлы (имена файлов одинаковые в каждой папке)
+# Справочник поставщиков: папка с выгрузками и срок поставки, дн.
+# lead_time_days = None — срок выводится из файла «товар в пути» (даты заказа и поступления).
 SUPPLIERS = {
-    "iek": {"name": "IEK", "dir": DATA_DIR / "iek"},
-    "se": {"name": "Systeme Electric", "dir": DATA_DIR / "se"},
+    "iek": {"name": "IEK", "dir": DATA_DIR / "iek", "lead_time_days": None},
+    "se": {"name": "Systeme Electric", "dir": DATA_DIR / "se", "lead_time_days": 40},
 }
 DATA_FILES = {
     "sales_transactions": "sales_transactions.xlsx",  # построчные расходные накладные
@@ -37,6 +38,10 @@ SERVICE_LEVEL_Z = 1.65             # ~95% уровень сервиса для �
 HISTORY_MONTHS = 12                # окно для базового спроса
 OUTLIER_MAD_K = 5.0                # порог выброса: медиана + k * MAD по строкам накладных
 OUTLIER_MONTH_SHARE = 0.4          # и строка даёт больше этой доли продаж месяца
+MONTH_SPIKE_K = 5.0                # всплеск месяца без накладной: медиана + k * MAD ненулевых месяцев
+MONTH_SPIKE_RATIO = 4.0            # и больше этого числа медиан ненулевых месяцев
+LONG_STOCKOUT_MONTHS = 6           # товара нет столько месяцев подряд — спрос не восстанавливаем
+DISCONTINUED_MARK = "!!!"          # пометка в названии 1С, похожая на «выводится из ассортимента»
 
 # --- LLM (опционально) ---
 LLM_PROVIDER = "openai"            # "openai" или "nvidia"

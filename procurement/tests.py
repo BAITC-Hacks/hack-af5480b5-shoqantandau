@@ -164,7 +164,7 @@ class MustHave4OneOffOrders(SimpleTestCase):
         spike = [{"code": "C", "qty": 2000, "date": "2026-06-15", "doc": "ТЕСТ-2", "monthly_only": True}]
         r = row(calculate(data, Params(lead_time_days=30, test_orders=spike)), "C")
         self.assertLessEqual(abs(r["qty_recommended"] - base), max(3, 0.15 * base))
-        self.assertIn("Сглажены всплески", r["reason"])
+        self.assertIn("всплеск", r["reason"])
 
 
 class StockoutEdgeCases(SimpleTestCase):
@@ -184,7 +184,7 @@ class StockoutEdgeCases(SimpleTestCase):
         r = row(calculate(data, Params(lead_time_days=30)), "E")
         self.assertEqual(r["qty_recommended"], 0)
         self.assertTrue(r["needs_review"])
-        self.assertIn("Расчётно нужно", r["reason"])
+        self.assertIn("По расчёту нужно", r["reason"])
 
 
 class MustHave5GroupedWithReasons(SimpleTestCase):
@@ -194,5 +194,5 @@ class MustHave5GroupedWithReasons(SimpleTestCase):
         data = make_data({"A": {"monthly": [40.0] * 33}, "B": {"monthly": [5.0] * 33}})
         r = calculate(data)
         self.assertTrue((r["reason"].str.len() > 20).all())
-        self.assertTrue(r["reason"].str.contains("Прогноз на").all())
+        self.assertTrue(r["reason"].str.contains("до следующего заказа").all())
         self.assertEqual(set(r["supplier"]), {"test"})

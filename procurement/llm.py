@@ -66,7 +66,7 @@ def template_explanation(line) -> str:
     parts = []
     if d.get("flags"):
         parts.append("Проверьте позицию: " + "; ".join(d["flags"]) + ".")
-    if line.qty_to_order == 0 and "Расчётно нужно" in (line.reason or ""):
+    if line.qty_to_order == 0 and "По расчёту нужно" in (line.reason or ""):
         parts.append("Автоматически заказ не предлагается из-за пометки в названии, хотя расчёт показывает потребность — "
                      "если позиция ещё закупается, укажите количество вручную.")
     elif line.qty_to_order > 0:

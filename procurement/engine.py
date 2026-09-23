@@ -73,6 +73,35 @@ class Params:
         return d
 
 
+def prepare_lines(tx: pd.DataFrame, months: list[pd.Period]) -> dict[str, pd.DataFrame]:
+    """Строки накладных по артикулам (doc+дата), с суммой артикула за месяц — один раз на поставщика."""
+    if tx.empty:
+        return {}
+    t = tx.assign(month=tx["date"].dt.to_period("M"))
+    t = t[t["month"].isin(months)]
+    lines = t.groupby(["code", "doc", "date", "month"], as_index=False, sort=False, observed=True)["qty"].sum()
+    lines["month_tot"] = lines.groupby(["code", "month"], observed=True)["qty"].transform("sum")
+    return {c: g for c, g in lines.groupby("code", sort=False)}
+
+
+def detect_one_offs_fast(lines: pd.DataFrame | None, monthly_sales: np.ndarray, k: float, share: float) -> list[dict]:
+    """То же, что detect_one_offs, но на заранее сгруппированных строках (numpy, без groupby)."""
+    if lines is None or len(lines) < 5:
+        return []
+    q = lines["qty"].to_numpy(dtype=float)
+    med = float(np.median(q))
+    mad = float(np.median(np.abs(q - med))) * 1.4826
+    doc_thr = max(med + k * max(mad, 1.0), 3 * med)
+    nz = monthly_sales[monthly_sales > 0]
+    month_thr = 1.5 * (float(np.median(nz)) if len(nz) else 0.0)
+    flag = (q > doc_thr) & (q > month_thr) & (q >= share * lines["month_tot"].to_numpy(dtype=float))
+    if not flag.any():
+        return []
+    sel = lines[flag]
+    return [{"doc": r.doc, "date": r.date, "month": r.month, "qty": float(r.qty), "excess": float(r.qty) - med,
+             "typical": med} for r in sel.itertuples(index=False)]
+
+
 # ---------- сезонность и рост на уровне поставщика ----------
 
 def seasonal_index_from_series(s: pd.Series) -> np.ndarray:
@@ -150,6 +179,18 @@ def detect_one_offs(tx: pd.DataFrame, monthly_sales: pd.Series, k: float, share:
     return out
 
 
+def _n(v: float) -> str:
+    """Число для человека: 54.7 -> «55», 3.4 -> «3,4»."""
+    return f"{v:.0f}" if abs(v) >= 10 else f"{v:.1f}".replace(".", ",").replace(",0", "")
+
+
+def _days_word(n: int) -> str:
+    n = int(n)
+    w = "день" if n % 10 == 1 and n % 100 != 11 else (
+        "дня" if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14 else "дней")
+    return f"{n} {w}"
+
+
 def _fmt_need(need: float) -> str:
     need = max(need, 0.0)
     return f"{need:.1f}" if 0 < need < 10 else f"{need:.0f}"
@@ -218,9 +259,19 @@ def days_of_supply(qty: float, daily_base: float, start: date, idx: np.ndarray, 
 
 # ---------- основной расчёт ----------
 
+def _memo(data: SupplierData, key, fn):
+    """Кэш тяжёлых промежуточных таблиц на объекте данных (страница проверки считает 10 сценариев)."""
+    store = data.__dict__.setdefault("_memo", {})
+    if key not in store:
+        store[key] = fn()
+    return store[key]
+
+
 def _build_matrix(data: SupplierData, months: list[pd.Period], col: str) -> pd.DataFrame:
-    m = data.monthly[data.monthly["month"].isin(months)]
-    return m.pivot_table(index="code", columns="month", values=col, aggfunc="sum").reindex(columns=months).fillna(0.0)
+    def build():
+        m = data.monthly[data.monthly["month"].isin(months)]
+        return m.pivot_table(index="code", columns="month", values=col, aggfunc="sum").reindex(columns=months).fillna(0.0)
+    return _memo(data, ("matrix", col, tuple(months)), build).copy()
 
 
 def calculate(data: SupplierData, params: Params | None = None) -> pd.DataFrame:
@@ -261,8 +312,14 @@ def calculate(data: SupplierData, params: Params | None = None) -> pd.DataFrame:
 
     sup_idx = supplier_seasonal_index(data.seasonality) if p.use_seasonality else np.ones(12)
     sup_growth = supplier_growth(data.seasonality, last_full) if p.use_growth else 1.0
-    cat_prof = category_profiles(data, last_full) if (p.use_seasonality or p.use_growth) else {}
-    tx_by_code = {c: g for c, g in tx.groupby("code")} if not tx.empty else {}
+    cat_prof = _memo(data, ("cat", last_full), lambda: category_profiles(data, last_full)) \
+        if (p.use_seasonality or p.use_growth) else {}
+    if not p.use_outliers:
+        lines_by_code = {}
+    elif p.test_orders:
+        lines_by_code = prepare_lines(tx, months)
+    else:
+        lines_by_code = _memo(data, ("lines", tuple(months)), lambda: prepare_lines(tx, months))
     cal = np.array([m.month for m in months])
     hist_mask = np.isin(np.arange(len(months)), np.arange(len(months) - len(hist), len(months)))
 
@@ -276,14 +333,12 @@ def calculate(data: SupplierData, params: Params | None = None) -> pd.DataFrame:
 
         # 2. разовые крупные заказы
         one_offs = []
-        if p.use_outliers and code in tx_by_code:
-            oo = detect_one_offs(tx_by_code[code][tx_by_code[code]["date"].dt.to_period("M").isin(months)],
-                                 pd.Series(raw), p.outlier_k, p.outlier_share)
-            for _, r in oo.iterrows():
+        if p.use_outliers:
+            for r in detect_one_offs_fast(lines_by_code.get(code), raw, p.outlier_k, p.outlier_share):
                 i = months.index(r["month"])
                 removed = min(r["excess"], clean[i])
                 clean[i] -= removed
-                one_offs.append({"doc": r["doc"], "date": r["date"].strftime("%d.%m.%Y"), "qty": float(r["qty"]),
+                one_offs.append({"doc": r["doc"], "date": r["date"].strftime("%d.%m.%Y"), "qty": r["qty"],
                                  "removed": float(removed), "month": str(r["month"]), "in_window": bool(hist_mask[i])})
 
         # 2б. всплески в месячном отчёте без крупной накладной
@@ -340,11 +395,11 @@ def calculate(data: SupplierData, params: Params | None = None) -> pd.DataFrame:
                         stockout_months.append(f"{MONTH_NAMES[months[i].month - 1]} {months[i].year}")
         flags = []
         if marked:
-            flags.append(f"в названии пометка «{constants.DISCONTINUED_MARK}» — возможно, позиция выводится из "
-                         f"ассортимента; упущенный спрос не восстанавливался")
+            flags.append(f"в названии пометка «{constants.DISCONTINUED_MARK}» — возможно, товар выводится из "
+                         f"ассортимента")
         if long_so and p.use_stockout:
-            flags.append(f"товара нет на складе {streak} мес. подряд — проверьте, закупается ли позиция; "
-                         f"упущенный спрос за этот период не восстанавливался")
+            flags.append(f"товара нет на складе {streak} мес. подряд — проверьте, закупается ли он ещё; "
+                         f"недополученные продажи за это время не добавляем")
 
         # 6. база и разброс
         des_h = (clean / season)[hist_mask]
@@ -395,35 +450,47 @@ def calculate(data: SupplierData, params: Params | None = None) -> pd.DataFrame:
         need_raw = f_raw + s_raw - stock_now - in_transit
         naive_qty = int(math.ceil(need_raw / moq) * moq) if need_raw > 0 else 0
 
-        # обоснование
+        # обоснование — простым языком, с цифрами (для менеджера, не для программиста)
         oo_in = [o for o in one_offs if o["in_window"]]
+        u = it["unit"]
         if flags:
-            reasons.append("Проверить: " + "; ".join(flags) + ".")
-        reasons.append(f"Регулярный спрос {base:.1f} {it['unit']}/мес в среднем за {p.history_months} мес. "
-                       f"(с учётом сезона сейчас ≈ {base * idx[today.month - 1]:.1f}).")
+            reasons.append("Проверьте вручную: " + "; ".join(flags) + ".")
+        now_m = base * idx[today.month - 1]
+        reasons.append(f"Обычно продаётся около {_n(base)} {u} в месяц (в среднем за год)"
+                       + (f", сейчас по сезону — около {_n(now_m)}." if abs(now_m - base) >= max(1, 0.1 * base) else "."))
         if oo_in:
             tot = sum(o["removed"] for o in oo_in)
-            docs = "; ".join(f"накл. {o['doc']} от {o['date']} — {o['qty']:.0f}" for o in oo_in[:3])
-            reasons.append(f"Исключены разовые крупные заказы ({docs}): из спроса убрано {tot:.0f} сверх обычной строки.")
+            docs = "; ".join(f"накл. {o['doc']} от {o['date']} — {o['qty']:.0f} {u}" for o in oo_in[:3])
+            reasons.append(f"Разовые крупные продажи не считаем обычным спросом ({docs}): "
+                           f"из расчёта убрано {tot:.0f} {u} сверх обычной покупки.")
         sp_in = [x for x in spikes if x["in_window"]]
         if sp_in:
-            reasons.append("Сглажены всплески без крупной накладной: " + ", ".join(
-                f"{x['label']} ({x['was']:.0f} → {x['now']:.0f})" for x in sp_in[:3]) + ".")
+            reasons.append("Нетипичный всплеск в отчёте продаж сглажен: " + ", ".join(
+                f"{x['label']} (было {x['was']:.0f}, считаем {x['now']:.0f})" for x in sp_in[:3]) + ".")
         if stockout_months:
-            add_txt = f"{added:.0f}" if added >= 1 else f"{added:.1f}"
-            reasons.append(f"Товара не было: {', '.join(stockout_months)} — упущенный спрос восстановлен на +{add_txt}.")
-        if p.use_seasonality:
-            reasons.append(f"Сезонность на горизонте ×{season_h:.2f} ({' + '.join(season_src)}).")
-        if g_src != "не учитывается":
-            reasons.append(f"Рост {g_src}: {(g_year - 1) * 100:+.0f}% г/г (×{growth:.2f} к базе).")
-        reasons.append(f"Прогноз на {horizon} дн. (поставка {lead} + цикл заказа {p.review_days}) = {forecast:.0f}; "
-                       f"страховой запас {safety:.0f}; остаток {stock_now:.0f}; в пути {in_transit:.0f} "
-                       f"→ потребность {_fmt_need(need)}" + (f", округлено до кратности {moq:.0f} → {qty}." if moq > 1 else f" → {qty}."))
+            reasons.append(f"Товара не было на складе ({', '.join(stockout_months)}) — продажи тогда были занижены, "
+                           f"к спросу добавлено {_n(added)} {u}.")
+        if p.use_seasonality and abs(season_h - 1) >= 0.03:
+            reasons.append(f"Сезон: в ближайшие недели продажи обычно на {abs(season_h - 1) * 100:.0f}% "
+                           f"{'выше' if season_h > 1 else 'ниже'} среднего.")
+        if g_src == "плановый":
+            reasons.append(f"Заложен плановый рост продаж {(g_year - 1) * 100:+.0f}% в год.")
+        elif g_src == "по истории" and abs(g_year - 1) >= 0.03:
+            reasons.append(f"За последний год продажи {'выросли' if g_year > 1 else 'снизились'} "
+                           f"на {abs(g_year - 1) * 100:.0f}% — это учтено.")
+        pack = f" (с округлением до упаковки по {moq:.0f} {u})" if moq > 1 else ""
+        head = (f"На {_days_word(horizon)} ({_days_word(lead)} на поставку + {_days_word(p.review_days)} до следующего "
+                f"заказа) нужно около {forecast:.0f} {u} и {safety:.0f} {u} запаса на случай всплеска. "
+                f"На складе {stock_now:.0f}, в пути {in_transit:.0f}")
+        if qty_calc > 0:
+            reasons.append(f"{head} → заказать {qty_calc} {u}{pack}.")
+        else:
+            reasons.append(f"{head} — этого хватает, заказывать не нужно.")
         if qty_calc != qty:
-            reasons.append(f"Расчётно нужно {qty_calc}, но из-за пометки «{constants.DISCONTINUED_MARK}» автоматически "
-                           f"не предлагается — при необходимости укажите количество вручную.")
+            reasons.append(f"По расчёту нужно {qty_calc} {u}, но из-за пометки «{constants.DISCONTINUED_MARK}» "
+                           f"автоматически не предлагаем — впишите количество вручную, если товар ещё закупается.")
         if naive_qty != qty and (oo_in or sp_in or stockout_months):
-            reasons.append(f"Без очистки данных рекомендация была бы {naive_qty}.")
+            reasons.append(f"Если не чистить данные, получилось бы {naive_qty} {u}.")
 
         details.update({"clean": clean.tolist(), "season_idx": idx.tolist(), "one_offs": one_offs,
                         "spikes": spikes, "flags": flags, "category": cat_key,

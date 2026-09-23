@@ -30,7 +30,7 @@ MONTHS_RU = {"янв": 1, "фев": 2, "мар": 3, "апр": 4, "май": 5, "�
 MONTHS_GEN = {"января": 1, "февраля": 2, "марта": 3, "апреля": 4, "мая": 5, "июня": 6,
               "июля": 7, "августа": 8, "сентября": 9, "октября": 10, "ноября": 11, "декабря": 12}
 
-CACHE_VERSION = 5
+CACHE_VERSION = 6
 
 
 @dataclass
@@ -89,6 +89,32 @@ class SupplierData:
 
 # ---------- helpers ----------
 
+try:  # calamine (Rust) читает xlsx в ~5 раз быстрее openpyxl; если не установлен — openpyxl
+    import python_calamine  # noqa: F401
+    EXCEL_ENGINE = "calamine"
+except ImportError:
+    EXCEL_ENGINE = "openpyxl"
+
+
+def _read_raw(path: Path) -> pd.DataFrame:
+    """Первый лист целиком, без заголовка — файл читается один раз."""
+    return pd.read_excel(path, sheet_name=0, header=None, engine=EXCEL_ENGINE)
+
+
+def _with_header(raw: pd.DataFrame, h: int) -> pd.DataFrame:
+    df = raw.iloc[h + 1:].reset_index(drop=True)
+    cols, seen = [], {}
+    for i, c in enumerate(raw.iloc[h].tolist()):
+        name = str(c).strip() if c is not None and not (isinstance(c, float) and np.isnan(c)) else f"Unnamed: {i}"
+        if name in seen:
+            seen[name] += 1
+            name = f"{name}.{seen[name]}"
+        else:
+            seen[name] = 0
+        cols.append(name)
+    df.columns = cols
+    return df
+
 def _norm_code(v) -> str | None:
     if v is None or (isinstance(v, float) and np.isnan(v)):
         return None
@@ -143,7 +169,7 @@ def _wide_months_to_long(df: pd.DataFrame, code_col: str, value_name: str) -> pd
 # ---------- file readers ----------
 
 def read_transactions(path: Path) -> pd.DataFrame:
-    df = pd.read_excel(path, dtype={"Номер": str, "Код": str})
+    df = _with_header(_read_raw(path), 0)
     df = df[df["Дата"].astype(str).str.match(r"\d{2}\.\d{2}\.\d{4}")]
     df = df[df["Документ"].astype(str).str.startswith("Расходная накладная")]
     out = pd.DataFrame({
@@ -160,9 +186,9 @@ def read_transactions(path: Path) -> pd.DataFrame:
 
 
 def read_sales_monthly(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
-    raw = pd.read_excel(path, sheet_name=0, header=None)
+    raw = _read_raw(path)
     h = _find_header_row(raw, "Номенклатура.Код")
-    df = pd.read_excel(path, sheet_name=0, header=h)
+    df = _with_header(raw, h)
     code = _col(df, "Номенклатура.Код")
     long = _wide_months_to_long(df, code, "sales_1c")
     long["sales_1c"] = long["sales_1c"].clip(lower=0)  # возвраты не делают спрос отрицательным
@@ -177,9 +203,9 @@ def read_sales_monthly(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
 
 
 def read_stock_monthly(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
-    raw = pd.read_excel(path, sheet_name=0, header=None)
+    raw = _read_raw(path)
     h = _find_header_row(raw, "Номенклатура.Код")
-    df = pd.read_excel(path, sheet_name=0, header=h)
+    df = _with_header(raw, h)
     code = _col(df, "Номенклатура.Код")
     long = _wide_months_to_long(df, code, "stock_open")  # начальный остаток месяца
     try:
@@ -193,9 +219,9 @@ def read_stock_monthly(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
 
 
 def read_moq(path: Path) -> pd.DataFrame:
-    raw = pd.read_excel(path, sheet_name=0, header=None)
+    raw = _read_raw(path)
     h = _find_header_row(raw, "Код")
-    df = pd.read_excel(path, sheet_name=0, header=h)
+    df = _with_header(raw, h)
     code = _col(df, "Код 1с", "Номенклатура.Код")
     q = _col(df, "Мин. разр", "Кратность")
     out = pd.DataFrame({"code": df[code].map(_norm_code),
@@ -218,9 +244,9 @@ def read_in_transit(path: Path, data_date: date) -> tuple[pd.DataFrame, pd.DataF
     SE  — сводный отчёт закупщика с колонкой 'в пути', категорией и текущими остатками.
     Возвращает (по SKU: in_transit, next_arrival), (заказы), (доп. поля SKU).
     """
-    raw = pd.read_excel(path, sheet_name=0, header=None)
+    raw = _read_raw(path)
     h = _find_header_row(raw, "Код 1с")
-    df = pd.read_excel(path, sheet_name=0, header=h)
+    df = _with_header(raw, h)
     code = _col(df, "Код 1с")
     df[code] = df[code].map(_norm_code)
     df = df.dropna(subset=[code])
@@ -266,9 +292,9 @@ def read_in_transit(path: Path, data_date: date) -> tuple[pd.DataFrame, pd.DataF
 
 
 def read_seasonality(path: Path) -> pd.DataFrame:
-    raw = pd.read_excel(path, sheet_name=0, header=None)
+    raw = _read_raw(path)
     h = _find_header_row(raw, "год")
-    df = pd.read_excel(path, sheet_name=0, header=h)
+    df = _with_header(raw, h)
     df = df[pd.to_numeric(df["год"], errors="coerce").notna()].copy()
     df["год"] = df["год"].astype(int)
     months = ["янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"]
@@ -395,6 +421,14 @@ def load_supplier(key: str, directory: Path | None = None) -> SupplierData:
 # ---------- cache ----------
 
 CACHE_DIR = constants.BASE_DIR / "data" / "cache"
+_MEMORY: dict = {}  # данные в памяти процесса: страницы не перечитывают кэш с диска
+import threading  # noqa: E402
+
+_LOCK = threading.Lock()
+
+
+def is_ready() -> bool:
+    return all(k in _MEMORY for k in constants.SUPPLIERS)
 
 
 def _fingerprint(files: dict[str, Path]) -> tuple:
@@ -405,15 +439,24 @@ def get_supplier(key: str, directory: Path | None = None, use_cache: bool = True
     d = Path(directory or constants.SUPPLIERS[key]["dir"])
     cache = CACHE_DIR / f"{key}.pkl"
     fp = (CACHE_VERSION, _fingerprint(resolve_files(key, directory)))
+    mem = _MEMORY.get(key)
+    if use_cache and mem and mem[0] == fp:
+        return mem[1]
     if use_cache and cache.exists():
         try:
             with open(cache, "rb") as fh:
                 saved_fp, data = pickle.load(fh)
             if saved_fp == fp:
+                _MEMORY[key] = (fp, data)
                 return data
         except Exception:
             pass
-    data = load_supplier(key, d)
+    with _LOCK:  # два запроса одновременно не разбирают одни и те же файлы
+        mem = _MEMORY.get(key)
+        if use_cache and mem and mem[0] == fp:
+            return mem[1]
+        data = load_supplier(key, d)
+        _MEMORY[key] = (fp, data)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     with open(cache, "wb") as fh:
         pickle.dump((fp, data), fh)

@@ -1,6 +1,7 @@
 {% extends "procurement/base.html" %}
+{% load procurement_extras %}
 {% block content %}
-<p class="crumbs"><a href="{% url 'procurement:sku_search' %}">Артикулы</a> / {{ supplier }}</p>
+<p class="crumbs"><a href="{% url 'procurement:sku_search' %}">Товары</a> / {{ supplier }}</p>
 <h1>{{ item.name }}</h1>
 <dl class="facts">
   <div><dt>Код 1С</dt><dd>{{ code }}</dd></div>
@@ -14,12 +15,16 @@
 
 {% if chart %}
 <section class="panel chart-panel">
-  <h2>Спрос по месяцам</h2>
+  <h2>Продажи по месяцам</h2>
   {{ chart|safe }}
   <p class="legend"><span class="lg lg-bar"></span> продажи из 1С <span class="lg lg-oneoff"></span> месяц с исключённой разовой продажей
     <span class="lg lg-line"></span> очищенный спрос для расчёта <span class="lg lg-so"></span> товара не было</p>
-  {% if calc is not None %}<p class="note"><b>Рекомендация сейчас: {{ calc.qty_recommended }}</b> (без очистки данных — {{ calc.qty_raw }}). {{ calc.reason }}</p>
-  <p><a href="{% url 'procurement:check' %}?supplier={{ supplier_key }}&code={{ code }}">Проверить сценарии для этого артикула</a></p>{% endif %}
+  {% if calc is not None %}
+  <div class="why-box" style="margin-top:14px">
+    <p style="margin:0 0 8px"><b>Сейчас советуем заказать: {{ calc.qty_recommended }}</b> <span class="muted">(если не чистить данные — {{ calc.qty_raw }})</span></p>
+    <ul>{% for sent in calc.reason|sentences %}<li>{{ sent }}</li>{% endfor %}</ul>
+    <div class="why-links"><a href="{% url 'procurement:check' %}?supplier={{ supplier_key }}&code={{ code }}">Что будет, если…</a></div>
+  </div>{% endif %}
 </section>
 {% endif %}
 
@@ -27,7 +32,7 @@
   <section>
     <h2>По месяцам</h2>
     <table class="grid">
-      <thead><tr><th>Месяц</th><th class="num">Продажи (отчёт 1С)</th><th class="num">Продажи (накладные)</th><th class="num">Остаток на начало</th></tr></thead>
+      <thead><tr><th>Месяц</th><th class="num">Продано (отчёт 1С)</th><th class="num">Продано (по накладным)</th><th class="num">Остаток на 1-е число</th></tr></thead>
       <tbody>
       {% for r in rows %}
         <tr{% if r.stock_open <= 0 %} class="row-stockout"{% endif %}>
@@ -36,10 +41,10 @@
       {% endfor %}
       </tbody>
     </table>
-    <p class="note">Строки с нулевым остатком на начало месяца подсвечены — это кандидаты в периоды отсутствия товара.</p>
+    <p class="note">Строки с нулевым остатком на начало месяца подсвечены — это месяцы, когда товар мог закончиться.</p>
   </section>
   <section>
-    <h2>Крупнейшие накладные</h2>
+    <h2>Самые крупные продажи</h2>
     <table class="grid">
       <thead><tr><th>Накладная</th><th>Дата</th><th class="num">Кол-во</th></tr></thead>
       <tbody>

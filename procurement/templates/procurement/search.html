@@ -1,13 +1,14 @@
 {% extends "procurement/base.html" %}
 {% block content %}
-<h1>Артикулы</h1>
+<h1>Товары</h1>
+<p class="lead">Найдите товар, чтобы посмотреть его продажи по месяцам, остатки и крупнейшие продажи.</p>
 <form class="search" method="get">
-  <input type="search" name="q" value="{{ q }}" placeholder="Код 1С, артикул или часть названия" autofocus>
+  <input type="search" name="q" value="{{ q }}" placeholder="Например: розетка BRITE или 030200519" aria-label="Поиск товара" autofocus>
   <button class="btn" type="submit">Найти</button>
 </form>
 {% if q %}
   {% if results %}
-  <table class="grid">
+  <div class="table-wrap"><table class="grid">
     <thead><tr><th>Поставщик</th><th>Код 1С</th><th>Артикул</th><th>Наименование</th></tr></thead>
     <tbody>
     {% for r in results %}
@@ -16,7 +17,7 @@
           <td>{{ r.article }}</td><td>{{ r.name }}</td></tr>
     {% endfor %}
     </tbody>
-  </table>
-  {% else %}<p class="note">Ничего не найдено по «{{ q }}». Попробуйте часть кода или названия.</p>{% endif %}
+  </table></div>
+  {% else %}<p class="note">По запросу «{{ q }}» ничего не нашлось. Попробуйте одно слово из названия или часть кода.</p>{% endif %}
 {% endif %}
 {% endblock %}

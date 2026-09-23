@@ -9,19 +9,33 @@
   <link rel="stylesheet" href="{% static 'procurement/app.css' %}">
 </head>
 <body>
-  <header class="topbar">
-    <a class="brand" href="{% url 'procurement:run_form' %}">Пополнение склада</a>
-    <nav>
-      <a href="{% url 'procurement:run_form' %}">Расчёт заказов</a>
-      <a href="{% url 'procurement:check' %}">Проверка расчёта</a>
-      <a href="{% url 'procurement:backtest' %}">Точность прогноза</a>
-      <a href="{% url 'procurement:index' %}">Данные</a>
-      <a href="{% url 'procurement:sku_search' %}">Артикулы</a>
+  <header class="topbar"><div class="topbar-in">
+    <a class="brand" href="{% url 'procurement:run_form' %}">Заказы поставщикам<small>пополнение склада</small></a>
+    {% with u=request.resolver_match.url_name %}
+    <nav aria-label="Разделы">
+      <a href="{% url 'procurement:run_form' %}" class="{% if u == 'run_form' or u == 'run_detail' %}on{% endif %}">Заказы</a>
+      <a href="{% url 'procurement:sku_search' %}" class="{% if u == 'sku_search' or u == 'sku_detail' %}on{% endif %}">Товары</a>
+      <a href="{% url 'procurement:check' %}" class="{% if u == 'check' %}on{% endif %}">Как считается</a>
+      <a href="{% url 'procurement:backtest' %}" class="{% if u == 'backtest' %}on{% endif %}">Точность</a>
+      <a href="{% url 'procurement:index' %}" class="{% if u == 'index' %}on{% endif %}">Данные из 1С</a>
     </nav>
-  </header>
+    {% endwith %}
+  </div></header>
   <main class="page">
-    {% if messages %}{% for m in messages %}<div class="flash flash-{{ m.tags }}">{{ m }}</div>{% endfor %}{% endif %}
+    {% if messages %}{% for m in messages %}<div class="flash flash-{{ m.tags }}" role="status">{{ m }}</div>{% endfor %}{% endif %}
     {% block content %}{% endblock %}
   </main>
+  <div id="loading" role="alert" aria-live="assertive"><div class="box"><div class="spinner"></div>
+    <b id="loading-title">Секунду…</b><p class="note" id="loading-text"></p></div></div>
+  <script>
+    // Любая форма с data-loading показывает понятное окно ожидания
+    document.querySelectorAll('form[data-loading]').forEach(f => f.addEventListener('submit', () => {
+      document.getElementById('loading-title').textContent = f.dataset.loading;
+      document.getElementById('loading-text').textContent = f.dataset.loadingText || '';
+      document.getElementById('loading').classList.add('on');
+    }));
+    window.addEventListener('pageshow', () => document.getElementById('loading').classList.remove('on'));
+  </script>
+  {% block scripts %}{% endblock %}
 </body>
 </html>

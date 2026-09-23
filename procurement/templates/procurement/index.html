@@ -2,15 +2,15 @@
 {% block content %}
 <div class="head-row">
   <div>
-    <h1>Исходные данные</h1>
-    <p class="lead">Выгрузки из 1С по поставщикам. Расчёт заказов использует все шесть файлов каждого поставщика.</p>
+    <h1>Данные из 1С</h1>
+    <p class="lead">Какие выгрузки сейчас использует система. Чтобы посчитать заказ на свежих данных, загрузите новую выгрузку в том же формате.</p>
   </div>
-  <form method="post" action="{% url 'procurement:reload' %}">{% csrf_token %}
+  <form method="post" action="{% url 'procurement:reload' %}" data-loading="Перечитываем выгрузки…">{% csrf_token %}
     <button class="btn btn-ghost" type="submit">Перечитать файлы</button>
   </form>
 </div>
 
-<form class="panel form-grid upload" method="post" enctype="multipart/form-data" action="{% url 'procurement:upload' %}">{% csrf_token %}
+<form class="panel form-grid upload" method="post" enctype="multipart/form-data" action="{% url 'procurement:upload' %}" data-loading="Загружаем и проверяем файл…" data-loading-text="Это займёт несколько секунд.">{% csrf_token %}
   <label>Поставщик
     <select name="supplier">{% for s in suppliers %}<option value="{{ s.key }}">{{ s.name }}</option>{% endfor %}</select>
   </label>

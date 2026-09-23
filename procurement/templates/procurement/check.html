@@ -1,37 +1,40 @@
 {% extends "procurement/base.html" %}
+{% load procurement_extras %}
 {% block content %}
-<h1>Проверка расчёта</h1>
-<p class="lead">Один артикул в разных сценариях: как на рекомендацию влияют разовые заказы, товар в пути, остаток, прирост, дефицит и сезонность. Данные в базе не меняются.</p>
+<h1>Как считается заказ: «что будет, если…»</h1>
+<p class="lead">Возьмите любой товар и посмотрите, как меняется совет системы, если добавить крупную продажу, товар в пути, изменить остаток или рост. Настоящие данные при этом не меняются.</p>
 
-<form method="get" class="panel form-grid">
-  <label>Поставщик
-    <select name="supplier">{% for k, s in suppliers.items %}<option value="{{ k }}" {% if k == sup %}selected{% endif %}>{{ s.name }}</option>{% endfor %}</select>
-  </label>
-  <label>Код 1С <input name="code" value="{{ code }}" required></label>
-  <label>Разовая продажа, шт. <input name="big_qty" type="number" min="1" value="{{ big_qty|floatformat:0 }}"></label>
-  <label>Добавить в пути, шт. <input name="transit_add" type="number" min="0" value="{{ transit_add|floatformat:0 }}"></label>
-  <label>Остаток, шт. <input name="stock_val" type="number" min="0" value="{{ stock_val|floatformat:0 }}"></label>
-  <label>Плановый прирост, % <input name="growth" type="number" value="{{ growth|floatformat:0 }}"></label>
-  <div><button class="btn" type="submit">Пересчитать сценарии</button></div>
+<form method="get" class="panel" data-loading="Пересчитываем…">
+  <div class="form-grid" style="margin-top:0">
+    <label>Поставщик
+      <select name="supplier">{% for k, s in suppliers.items %}<option value="{{ k }}" {% if k == sup %}selected{% endif %}>{{ s.name }}</option>{% endfor %}</select>
+    </label>
+    <label>Код товара в 1С <input name="code" value="{{ code }}" required></label>
+    <label>Крупная разовая продажа, шт. <input name="big_qty" type="number" min="1" value="{{ big_qty|floatformat:0 }}"></label>
+    <label>Добавить товара в пути, шт. <input name="transit_add" type="number" min="0" value="{{ transit_add|floatformat:0 }}"></label>
+    <label>Остаток на складе, шт. <input name="stock_val" type="number" min="0" value="{{ stock_val|floatformat:0 }}"></label>
+    <label>Ожидаемый рост продаж, % <input name="growth" type="number" value="{{ growth|floatformat:0 }}"></label>
+  </div>
+  <p style="margin:16px 0 0"><button class="btn" type="submit">Пересчитать</button></p>
 </form>
 
 {% if error %}<div class="flash flash-error" style="margin-top:16px">{{ error }}</div>{% endif %}
 
 {% if rows %}
-<h2 style="margin-top:24px">{{ item.name }} <small class="note">{{ supplier_name }}, код {{ code }} — <a href="{% url 'procurement:sku_detail' sup code %}">история продаж</a></small></h2>
+<h2 style="margin-top:28px">{{ item.name }}</h2>
+<p class="note">{{ supplier_name }}, код {{ code }} · <a href="{% url 'procurement:sku_detail' sup code %}">график продаж</a></p>
 <div class="table-wrap">
-<table class="grid orders">
-  <thead><tr><th>Сценарий</th><th>Что проверяем</th><th class="num">Спрос/мес</th><th class="num">Прогноз на горизонт</th>
-    <th class="num">Рекомендовано</th><th class="num">Изменение</th></tr></thead>
+<table class="grid">
+  <thead><tr><th>Что меняем</th><th>Что это показывает</th><th class="num">Спрос в месяц</th><th class="num">Советуем заказать</th><th class="num">Разница</th></tr></thead>
   <tbody>
   {% for r in rows %}
     <tr class="{% if r.key == 'base' %}row-base{% endif %}">
       <td><b>{{ r.title }}</b>
-        <details class="why"><summary>Обоснование</summary><p>{{ r.reason }}</p></details></td>
-      <td class="note">{{ r.hint }}</td>
-      <td class="num">{{ r.demand|floatformat:1 }}</td><td class="num">{{ r.forecast|floatformat:0 }}</td>
-      <td class="num qty">{{ r.qty }}</td>
-      <td class="num">{% if r.key == 'base' %}—{% elif r.delta > 0 %}<span class="up">+{{ r.delta }}</span>{% elif r.delta < 0 %}<span class="down">{{ r.delta }}</span>{% else %}0{% endif %}</td>
+        <details class="why"><summary>Почему столько?</summary><div class="why-box"><ul>{% for sent in r.reason|sentences %}<li>{{ sent }}</li>{% endfor %}</ul></div></details></td>
+      <td>{{ r.hint|capfirst }}{% if r.req %}<span class="hint-req">{{ r.req|lower }} кейса</span>{% endif %}</td>
+      <td class="num">{{ r.demand|floatformat:1 }}</td>
+      <td class="num rec">{{ r.qty|num }}</td>
+      <td class="num">{% if r.key == 'base' %}—{% elif r.delta > 0 %}<span class="up">+{{ r.delta }}</span>{% elif r.delta < 0 %}<span class="down">{{ r.delta }}</span>{% else %}без изменений{% endif %}</td>
     </tr>
   {% endfor %}
   </tbody>

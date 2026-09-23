@@ -82,6 +82,7 @@ def upload_data(request):
 def reset_uploads(request):
     shutil.rmtree(loaders.UPLOAD_DIR, ignore_errors=True)
     shutil.rmtree(loaders.CACHE_DIR, ignore_errors=True)
+    loaders._MEMORY.clear()
     messages.info(request, "Загруженные файлы удалены, используются демо-данные партнёра.")
     return redirect("procurement:index")
 
@@ -89,6 +90,7 @@ def reset_uploads(request):
 @require_POST
 def reload_data(request):
     shutil.rmtree(loaders.CACHE_DIR, ignore_errors=True)
+    loaders._MEMORY.clear()
     messages.info(request, "Данные перечитаны из файлов.")
     return redirect("procurement:index")
 
@@ -181,7 +183,8 @@ def run_form(request):
         run = services.run_calculation(params, [sup] if sup in constants.SUPPLIERS else None)
         return redirect("procurement:run_detail", run.pk)
     # группы товаров для выбора — только если данные уже разобраны (иначе страница открывалась бы 20–30 с)
-    groups, cached = [], all((loaders.CACHE_DIR / f"{k}.pkl").exists() for k in constants.SUPPLIERS)
+    groups = []
+    cached = loaders.is_ready() or all((loaders.CACHE_DIR / f"{k}.pkl").exists() for k in constants.SUPPLIERS)
     leads = {k: v.get("lead_time_days") for k, v in constants.SUPPLIERS.items()}
     if cached:
         seen = {}
@@ -225,12 +228,17 @@ def _apply_edits(request, run):
     if action in ("approve", "reject", "reset") and ids:
         status = {"approve": "approved", "reject": "rejected", "reset": "new"}[action]
         n = run.lines.filter(pk__in=ids).update(status=status)
-        label = {"approve": "Утверждено", "reject": "Отклонено", "reset": "Возвращено в работу"}[action]
-        messages.success(request, f"{label} позиций: {n}.")
+        label = {"approve": "Утверждено товаров", "reject": "Отмечено «не заказываем»",
+                 "reset": "Возвращено в работу"}[action]
+        messages.success(request, f"{label}: {n}.")
     elif action in ("approve", "reject", "reset"):
-        messages.error(request, "Отметьте позиции галочками, затем нажмите кнопку.")
+        messages.error(request, "Сначала отметьте товары галочками слева, затем нажмите кнопку.")
     elif changed:
-        messages.success(request, f"Сохранено изменений количества: {changed}.")
+        messages.success(request, f"Изменённые количества сохранены: {changed}.")
+
+
+VIEWS = [("order", "К заказу"), ("urgent", "Срочные"), ("review", "Проверить вручную"),
+         ("approved", "Утверждённые"), ("all", "Весь список")]
 
 
 def run_detail(request, pk):
@@ -240,31 +248,35 @@ def run_detail(request, pk):
         return redirect(request.get_full_path())
     sup_keys = [k for k in run.supplier.split(",") if k]
     active = request.GET.get("supplier") or (sup_keys[0] if sup_keys else "")
-    show = request.GET.get("show", "order")
-    urgency = request.GET.get("urgency", "")
+    view = request.GET.get("view", "order")
     q = request.GET.get("q", "").strip()
 
-    lines = run.lines.filter(supplier=active)
-    if show == "order":
-        lines = lines.filter(qty_recommended__gt=0)
-    if urgency:
-        lines = lines.filter(urgency=urgency)
-    status = request.GET.get("status", "")
-    if status == "review":
-        lines = run.lines.filter(supplier=active, needs_review=True)
-    elif status:
-        lines = lines.filter(status=status)
+    base = run.lines.filter(supplier=active).defer("details")
+    lines = {
+        "order": base.filter(qty_recommended__gt=0),
+        "urgent": base.filter(qty_recommended__gt=0, urgency="high"),
+        "review": base.filter(needs_review=True),
+        "approved": base.filter(status="approved"),
+        "all": base,
+    }.get(view, base.filter(qty_recommended__gt=0))
     if q:
         from django.db.models import Q
         lines = lines.filter(Q(code_1c__icontains=q) | Q(name__icontains=q) | Q(article__icontains=q))
     order = {"high": 0, "medium": 1, "low": 2}
     lines = sorted(lines, key=lambda x: (order.get(x.urgency, 3), x.days_of_cover or 0))
-    page = Paginator(lines, 100).get_page(request.GET.get("page"))
+    page = Paginator(lines, 50).get_page(request.GET.get("page"))
+    stat = run.stats.get(active, {})
+    counts = {
+        "order": stat.get("sku_to_order", 0), "urgent": stat.get("high", 0), "review": stat.get("review", 0),
+        "approved": run.lines.filter(supplier=active, status="approved").count(), "all": stat.get("sku_calculated", 0),
+    }
     return render(request, "procurement/run_detail.html", {
         "run": run, "active": active, "tabs": [(k, run.stats.get(k, {})) for k in sup_keys],
-        "stat": run.stats.get(active, {}), "page": page, "show": show, "urgency": urgency, "q": q,
-        "status": status, "approved": run.lines.filter(supplier=active, status="approved").count(),
-        "value_saved": (run.stats.get(active, {}).get("value_raw", 0) or 0) - (run.stats.get(active, {}).get("value_total", 0) or 0),
+        "stat": stat, "page": page, "view": view, "q": q,
+        "views": [(k, label, counts.get(k, 0)) for k, label in VIEWS],
+        "approved": counts["approved"],
+        "value_saved": (stat.get("value_raw", 0) or 0) - (stat.get("value_total", 0) or 0),
+        "qty_saved": (stat.get("qty_raw_total", 0) or 0) - (stat.get("qty_total", 0) or 0),
         "ai_label": llm.provider_label() if llm.is_enabled() else "",
     })
 
@@ -306,8 +318,8 @@ def export_run(request, pk):
             ws.column_dimensions[col].width = w
         ws.freeze_panes = "A2"
     if total == 0 and scope == "approved":
-        messages.error(request, "Нет утверждённых позиций. Отметьте позиции и нажмите «Утвердить», "
-                                "или выгрузите черновик со всеми рекомендациями.")
+        messages.error(request, "Пока нет утверждённых товаров. Отметьте товары галочками и нажмите «Утвердить» "
+                                "внизу экрана — или скачайте все рекомендации.")
         return redirect("procurement:run_detail", pk)
     buf = io.BytesIO()
     wb.save(buf)
@@ -358,28 +370,29 @@ def check_scenarios(request):
 
     scen = [
         ("base", "Базовый расчёт", "Все данные как есть", {}),
-        ("oneoff", f"+ разовая продажа {big_qty:.0f} шт.", "Требование 4: заказ исключается, рекомендация почти не меняется",
+        ("oneoff", f"+ разовая продажа {big_qty:.0f} шт.", "Требование 4: крупная сделка не раздувает заказ",
          {"test_orders": test_order}),
-        ("oneoff_raw", f"+ разовая продажа {big_qty:.0f} шт., без очистки", "Для сравнения: так посчитал бы Excel по сырым продажам",
+        ("oneoff_raw", "То же, но без очистки данных", "Для сравнения: так посчитал бы Excel по сырым продажам",
          {"test_orders": test_order, "use_outliers": False}),
-        ("spike", f"+ {big_qty:.0f} шт. только в месячном отчёте", "Требование 4: всплеск без накладной тоже сглаживается",
+        ("spike", f"Всплеск {big_qty:.0f} шт. только в отчёте 1С", "Требование 4: всплеск без накладной тоже сглаживается",
          {"test_orders": test_month}),
-        ("transit", f"+ {transit_add:.0f} в пути", "Требование 1: товар в пути уменьшает заказ",
+        ("transit", f"+ {transit_add:.0f} шт. в пути", "Требование 1: товар в пути уменьшает заказ",
          {"overrides": {code: {"in_transit": float(item["in_transit"]) + transit_add}}}),
-        ("stock", f"Остаток = {stock_val:.0f}", "Требование 1: остаток уменьшает заказ",
+        ("stock", f"Остаток {stock_val:.0f} шт.", "Требование 1: остаток уменьшает заказ",
          {"overrides": {code: {"stock_now": stock_val}}}),
-        ("growth", f"Плановый прирост {growth:+.0f}% г/г", "Требование 1: прогноз по приросту", {"growth_plan_pct": growth}),
+        ("growth", f"Рост продаж {growth:+.0f}% в год", "Требование 1: ожидаемый рост увеличивает заказ", {"growth_plan_pct": growth}),
     ] + ([
-        ("category", f"Группа товаров {my_cat} → {other_cat}", "Требование 1: категория влияет через сезонность и рост группы",
+        ("category", f"Группа товаров {my_cat} → {other_cat}", "Требование 1: у другой группы товаров другой сезон и рост",
          {"overrides": {code: {"category": other_cat}}}),
     ] if other_cat else []) + [
-        ("no_stockout", "Без учёта дефицита", "Требование 3: без восстановления упущенного спроса", {"use_stockout": False}),
-        ("no_season", "Без сезонности", "Требование 2: сезонный индекс против среднего", {"use_seasonality": False}),
+        ("no_stockout", "Без учёта дефицита", "Требование 3: если не учитывать, что товара не было, заказ меньше", {"use_stockout": False}),
+        ("no_season", "Без сезонности", "Требование 2: если считать по среднему, без учёта сезона", {"use_seasonality": False}),
     ]
     rows = []
     for key, title, hint, extra in scen:
         r = b if key == "base" else engine.calculate(data, engine.Params(**base_p, **extra)).iloc[0]
-        rows.append({"key": key, "title": title, "hint": hint, "qty": int(r["qty_recommended"]),
+        req, _, plain = hint.partition(": ") if hint.startswith("Требование") else ("", "", hint)
+        rows.append({"key": key, "title": title, "hint": plain, "req": req, "qty": int(r["qty_recommended"]),
                      "delta": int(r["qty_recommended"]) - int(b["qty_recommended"]),
                      "demand": r["regular_demand"], "forecast": r["forecast"], "reason": r["reason"]})
     ctx.update({"rows": rows, "item": item, "base": b, "big_qty": big_qty, "transit_add": transit_add,

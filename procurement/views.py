@@ -63,8 +63,23 @@ def sku_detail(request, supplier, code):
     top_docs = (tx.groupby(["doc", tx["date"].dt.date])["qty"].sum()
                 .sort_values(ascending=False).head(10).reset_index())
     top_docs.columns = ["doc", "date", "qty"]
+
+    # график: сырые продажи против очищенного спроса (тот же расчёт, что и в заказе)
+    from . import charts, engine as eng
+    chart, calc = "", None
+    res = eng.calculate(data, eng.Params(codes=[code]))
+    if not res.empty:
+        calc = res.iloc[0]
+        det = calc["details"]
+        months = det["months"]
+        so = {months.index(f"{y}-{m:02d}") for y, m in
+              [(int(x.split()[1]), eng.MONTH_NAMES.index(x.split()[0]) + 1) for x in det["stockout_months"]]
+              if f"{y}-{m:02d}" in months}
+        oo = {months.index(o["month"]) for o in det["one_offs"] if o["month"] in months}
+        chart = charts.demand_chart(months, det["raw"], det["clean"], so, oo)
     return render(request, "procurement/sku.html", {
-        "supplier": data.name, "code": code, "item": item,
+        "chart": chart, "calc": calc,
+        "supplier": data.name, "supplier_key": supplier, "code": code, "item": item,
         "rows": rows, "top_docs": top_docs.to_dict("records"),
         "next_arrival": None if pd.isna(item["next_arrival"]) else pd.Timestamp(item["next_arrival"]).date(),
     })
@@ -183,6 +198,7 @@ def run_detail(request, pk):
         "run": run, "active": active, "tabs": [(k, run.stats.get(k, {})) for k in sup_keys],
         "stat": run.stats.get(active, {}), "page": page, "show": show, "urgency": urgency, "q": q,
         "status": status, "approved": run.lines.filter(supplier=active, status="approved").count(),
+        "ai_label": llm.provider_label() if llm.is_enabled() else "",
     })
 
 
@@ -290,3 +306,20 @@ def check_scenarios(request):
     ctx.update({"rows": rows, "item": item, "base": b, "big_qty": big_qty, "transit_add": transit_add,
                 "stock_val": stock_val, "growth": growth, "supplier_name": data.name})
     return render(request, "procurement/check.html", ctx)
+
+
+# ---------- объяснение простыми словами ----------
+
+from django.http import JsonResponse  # noqa: E402
+
+from . import llm  # noqa: E402
+from .models import OrderLine  # noqa: E402
+
+
+@require_POST
+def explain_line(request, pk):
+    line = get_object_or_404(OrderLine, pk=pk)
+    text, source = llm.explain(line)
+    line.reason_ai = text
+    line.save(update_fields=["reason_ai"])
+    return JsonResponse({"text": text, "source": source})

@@ -12,6 +12,17 @@
   <div><dt>Кратность</dt><dd>{{ item.moq|floatformat:0 }}</dd></div>
 </dl>
 
+{% if chart %}
+<section class="panel chart-panel">
+  <h2>Спрос по месяцам</h2>
+  {{ chart|safe }}
+  <p class="legend"><span class="lg lg-bar"></span> продажи из 1С <span class="lg lg-oneoff"></span> месяц с исключённой разовой продажей
+    <span class="lg lg-line"></span> очищенный спрос для расчёта <span class="lg lg-so"></span> товара не было</p>
+  {% if calc is not None %}<p class="note"><b>Рекомендация сейчас: {{ calc.qty_recommended }}</b> (без очистки данных — {{ calc.qty_raw }}). {{ calc.reason }}</p>
+  <p><a href="{% url 'procurement:check' %}?supplier={{ supplier_key }}&code={{ code }}">Проверить сценарии для этого артикула</a></p>{% endif %}
+</section>
+{% endif %}
+
 <div class="two-col">
   <section>
     <h2>По месяцам</h2>

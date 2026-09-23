@@ -58,6 +58,8 @@
       <td><a href="{% url 'procurement:sku_detail' l.supplier l.code_1c %}">{{ l.code_1c }}</a><br><small>{{ l.article }}</small></td>
       <td>{{ l.name }}
         <details class="why"><summary>Почему столько</summary><p>{{ l.reason }}</p>
+          <div class="ai-box" id="ai-{{ l.pk }}">{% if l.reason_ai %}<p class="ai-text">{{ l.reason_ai }}</p>{% endif %}</div>
+          <button type="button" class="link-btn" data-explain="{{ l.pk }}">Объяснить простыми словами{% if ai_label %} (AI){% endif %}</button>
           <p><a href="{% url 'procurement:check' %}?supplier={{ l.supplier }}&code={{ l.code_1c }}">Проверить сценарии для этого артикула</a></p></details></td>
       <td class="num">{{ l.stock|floatformat:0 }}</td><td class="num">{{ l.in_transit|floatformat:0 }}</td>
       <td class="num">{{ l.regular_demand|floatformat:1 }}</td>
@@ -75,6 +77,21 @@
 </div>
 </form>
 <script>
+  const csrf = document.querySelector('#orders-form input[name=csrfmiddlewaretoken]').value;
+  document.querySelectorAll('[data-explain]').forEach(btn => btn.addEventListener('click', async () => {
+    const id = btn.dataset.explain, box = document.getElementById('ai-' + id);
+    btn.disabled = true; btn.textContent = 'Формулирую…';
+    try {
+      const r = await fetch(`/line/${id}/explain/`, {method: 'POST', headers: {'X-CSRFToken': csrf}});
+      const j = await r.json();
+      box.innerHTML = '';
+      const p = document.createElement('p'); p.className = 'ai-text'; p.textContent = j.text;
+      const s = document.createElement('small'); s.className = 'note'; s.textContent = 'Источник: ' + j.source;
+      box.append(p, s);
+      btn.textContent = 'Сформулировать заново';
+    } catch (e) { btn.textContent = 'Не удалось — повторить'; }
+    btn.disabled = false;
+  }));
   document.getElementById('sel-all')?.addEventListener('change', e => {
     document.querySelectorAll('input[name=sel]').forEach(c => c.checked = e.target.checked);
   });

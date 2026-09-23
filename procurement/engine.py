@@ -146,6 +146,23 @@ def horizon_forecast(daily_base: float, start: date, days: int, idx: np.ndarray,
     return total * growth, weight / max(days, 1)
 
 
+def days_of_supply(qty: float, daily_base: float, start: date, idx: np.ndarray, growth: float, limit: int = 730) -> float:
+    """На сколько дней хватит qty с учётом сезонности (помесячно, внутри месяца — линейно)."""
+    if daily_base <= 0:
+        return 9999.0
+    left, d, days = qty, start, 0.0
+    while days < limit:
+        nxt = date(d.year + (d.month == 12), d.month % 12 + 1, 1)
+        n = (nxt - d).days
+        per_day = daily_base * idx[d.month - 1] * growth
+        if per_day * n >= left:
+            return days + (left / per_day if per_day > 0 else n)
+        left -= per_day * n
+        days += n
+        d = nxt
+    return 9999.0
+
+
 # ---------- основной расчёт ----------
 
 def _build_matrix(data: SupplierData, months: list[pd.Period], col: str) -> pd.DataFrame:
@@ -271,11 +288,10 @@ def calculate(data: SupplierData, params: Params | None = None) -> pd.DataFrame:
         qty = int(math.ceil(need / moq) * moq) if need > 0 else 0
 
         # 9. срочность
-        daily_now = base / 30.0 * idx[today.month - 1] * growth
-        cover = stock_now / daily_now if daily_now > 0 else 9999.0
+        cover = days_of_supply(stock_now, base / 30.0, today, idx, growth)
         arrival = it.get("next_arrival")
-        cover_tr = cover + (in_transit / daily_now if daily_now > 0 and pd.notna(arrival)
-                            and pd.Timestamp(arrival).date() <= today + timedelta(days=lead) else 0)
+        arrives_in_time = pd.notna(arrival) and pd.Timestamp(arrival).date() <= today + timedelta(days=lead)
+        cover_tr = days_of_supply(stock_now + (in_transit if arrives_in_time else 0), base / 30.0, today, idx, growth)
         urgency = "high" if cover_tr < lead else ("medium" if cover_tr < horizon else "low")
 
         # тот же расчёт по «сырым» продажам — без исключения разовых заказов и без учёта дефицита

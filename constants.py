@@ -41,7 +41,7 @@ OUTLIER_MONTH_SHARE = 0.4          # и строка даёт больше эт�
 # --- LLM (опционально) ---
 LLM_PROVIDER = "openai"            # "openai" или "nvidia"
 OPENAI_API_KEY = ""
-OPENAI_MODEL = "gpt-4o-mini"
+OPENAI_MODEL = "gpt-5-mini"  # любая доступная вашему ключу chat-модель
 NVIDIA_API_KEY = ""
 NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
 NVIDIA_MODEL = "meta/llama-3.1-70b-instruct"

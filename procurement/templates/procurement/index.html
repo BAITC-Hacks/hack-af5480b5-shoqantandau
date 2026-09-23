@@ -10,6 +10,22 @@
   </form>
 </div>
 
+<form class="panel form-grid upload" method="post" enctype="multipart/form-data" action="{% url 'procurement:upload' %}">{% csrf_token %}
+  <label>Поставщик
+    <select name="supplier">{% for s in suppliers %}<option value="{{ s.key }}">{{ s.name }}</option>{% endfor %}</select>
+  </label>
+  <label>Выгрузка
+    <select name="kind">{% for k, v in kinds.items %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select>
+  </label>
+  <label>Файл xlsx из 1С <input type="file" name="file" accept=".xlsx" required></label>
+  <div><button class="btn" type="submit">Загрузить новую выгрузку</button>
+    <p class="note">Формат — как у текущих выгрузок. Если файл не разберётся, останутся прежние данные.</p></div>
+</form>
+{% if has_uploads %}
+<form method="post" action="{% url 'procurement:reset_uploads' %}" style="margin:-8px 0 20px">{% csrf_token %}
+  <button class="btn btn-ghost" type="submit">Вернуть демо-данные партнёра</button></form>
+{% endif %}
+
 <div class="suppliers">
 {% for s in suppliers %}
   <section class="supplier">
@@ -37,7 +53,7 @@
         <tbody>
         {% for f in s.files %}
           <tr><td>{{ f.name }}</td><td class="num">{{ f.size_kb }}</td>
-              <td>{% if f.exists %}есть{% else %}<b class="bad-text">нет</b>{% endif %}</td></tr>
+              <td>{% if f.exists %}{% if f.uploaded %}<b>загружен вами</b>{% else %}демо{% endif %}{% else %}<b class="bad-text">нет</b>{% endif %}</td></tr>
         {% endfor %}
         </tbody>
       </table>

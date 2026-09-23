@@ -30,7 +30,7 @@ MONTHS_RU = {"янв": 1, "фев": 2, "мар": 3, "апр": 4, "май": 5, "�
 MONTHS_GEN = {"января": 1, "февраля": 2, "марта": 3, "апреля": 4, "мая": 5, "июня": 6,
               "июля": 7, "августа": 8, "сентября": 9, "октября": 10, "ноября": 11, "декабря": 12}
 
-CACHE_VERSION = 4
+CACHE_VERSION = 5
 
 
 @dataclass
@@ -252,7 +252,7 @@ def read_in_transit(path: Path, data_date: date) -> tuple[pd.DataFrame, pd.DataF
                 arr = pd.Timestamp(data_date.year, int(m.group(2)), int(m.group(1)))
         per_sku = pd.DataFrame({"code": df[code], "in_transit": qty,
                                 "next_arrival": np.where(qty > 0, arr, pd.NaT)})
-        for src, dst in [("Категория 2026", "abc_class"), ("Свободный остаток", "stock_free"),
+        for src, dst in [("Категория 2026", "abc_class"), ("Свободный остаток", "stock_free"), ("СС реал", "cost"),
                          ("Остаток", "stock_total"), ("Артикул поставщика", "article"),
                          ("Наименование", "name")]:
             try:
@@ -285,10 +285,19 @@ def _category_from_code(code: str) -> str:
     return digits[:4] if len(digits) >= 4 else "прочее"
 
 
+UPLOAD_DIR = constants.BASE_DIR / "data" / "uploads"
+
+
+def resolve_files(key: str, directory: Path | None = None) -> dict[str, Path]:
+    """Файл, загруженный через интерфейс (data/uploads/<поставщик>/), важнее демо-файла."""
+    d = Path(directory or constants.SUPPLIERS[key]["dir"])
+    up = UPLOAD_DIR / key
+    return {k: (up / v if (up / v).exists() else d / v) for k, v in constants.DATA_FILES.items()}
+
+
 def load_supplier(key: str, directory: Path | None = None) -> SupplierData:
     sup = constants.SUPPLIERS[key]
-    d = Path(directory or sup["dir"])
-    files = {k: d / v for k, v in constants.DATA_FILES.items()}
+    files = resolve_files(key, directory)
     missing = [str(p.name) for p in files.values() if not p.exists()]
     if missing:
         raise FileNotFoundError(f"{sup['name']}: нет файлов {', '.join(missing)}")
@@ -334,6 +343,11 @@ def load_supplier(key: str, directory: Path | None = None) -> SupplierData:
     else:
         items["abc_class"] = ""
     items["moq"] = moq.set_index("code")["moq"].reindex(codes).fillna(1)
+    if "cost" in extra:  # себестоимость единицы (есть только в отчёте закупщика SE)
+        cost = pd.to_numeric(extra.set_index("code")["cost"], errors="coerce").reindex(codes)
+        items["cost"] = cost.where(cost > 0)
+    else:
+        items["cost"] = np.nan
     items["in_transit"] = transit.set_index("code")["in_transit"].reindex(codes).fillna(0)
     items["next_arrival"] = transit.set_index("code")["next_arrival"].reindex(codes)
 
@@ -383,15 +397,14 @@ def load_supplier(key: str, directory: Path | None = None) -> SupplierData:
 CACHE_DIR = constants.BASE_DIR / "data" / "cache"
 
 
-def _fingerprint(d: Path) -> tuple:
-    return tuple((f, (d / f).stat().st_mtime_ns, (d / f).stat().st_size)
-                 for f in constants.DATA_FILES.values() if (d / f).exists())
+def _fingerprint(files: dict[str, Path]) -> tuple:
+    return tuple((str(f), f.stat().st_mtime_ns, f.stat().st_size) for f in files.values() if f.exists())
 
 
 def get_supplier(key: str, directory: Path | None = None, use_cache: bool = True) -> SupplierData:
     d = Path(directory or constants.SUPPLIERS[key]["dir"])
     cache = CACHE_DIR / f"{key}.pkl"
-    fp = (CACHE_VERSION, str(d), _fingerprint(d))
+    fp = (CACHE_VERSION, _fingerprint(resolve_files(key, directory)))
     if use_cache and cache.exists():
         try:
             with open(cache, "rb") as fh:

@@ -108,3 +108,4 @@ h2 small { font-size: 14px; font-weight: 400; }
 .ai-text { color: var(--ink) !important; background: #eef2fb; border-left: 3px solid var(--accent); padding: 6px 10px; }
 .tag.warn { background: #fdf1e3; color: var(--medium); }
 form.busy { opacity: .6; pointer-events: none; }
+.upload { margin-bottom: 20px; }

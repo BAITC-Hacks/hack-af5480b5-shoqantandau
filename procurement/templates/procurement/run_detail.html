@@ -11,7 +11,11 @@
 
 <dl class="facts">
   <div><dt>Позиций к заказу</dt><dd>{{ stat.sku_to_order }} из {{ stat.sku_calculated }}</dd></div>
-  <div><dt>Всего единиц</dt><dd>{{ stat.qty_total }}</dd></div>
+  <div><dt>Всего единиц</dt><dd>{{ stat.qty_total }} <small>(без очистки данных — {{ stat.qty_raw_total }})</small></dd></div>
+  {% if stat.has_cost %}
+  <div><dt>Сумма заказа, ₸ по себестоимости</dt><dd>{{ stat.value_total|floatformat:0 }}</dd></div>
+  <div><dt>Без очистки данных было бы, ₸</dt><dd>{{ stat.value_raw|floatformat:0 }} <small>({{ value_saved|floatformat:0 }} ₸ не замораживается в запасах)</small></dd></div>
+  {% endif %}
   <div><dt>Срочных</dt><dd>{{ stat.high }}</dd></div>
   <div><dt>Срок поставки</dt><dd>{{ stat.lead_time_days }} дн.</dd></div>
   <div><dt>Найдено разовых заказов</dt><dd>{{ stat.one_offs }} арт.</dd></div>
@@ -51,7 +55,7 @@
 <table class="grid orders">
   <thead><tr><th><input type="checkbox" id="sel-all" aria-label="Отметить все"></th><th>Срочность</th><th>Код 1С</th><th>Наименование</th>
     <th class="num">Остаток</th><th class="num">В пути</th><th class="num">Спрос/мес</th><th class="num">Дней хватит</th>
-    <th class="num">Рекомендовано</th><th class="num">К заказу</th><th>Статус</th></tr></thead>
+    <th class="num">Рекомендовано</th><th class="num">К заказу</th>{% if stat.has_cost %}<th class="num">Сумма, ₸</th>{% endif %}<th>Статус</th></tr></thead>
   <tbody>
   {% for l in page %}
     <tr class="u-{{ l.urgency }} st-{{ l.status }}">
@@ -69,10 +73,11 @@
       <td class="num qty">{{ l.qty_recommended }}</td>
       <td class="num"><input class="qty-input{% if l.qty_final is not None %} edited{% endif %}" type="number" min="0" step="{{ l.moq|floatformat:0 }}"
             name="qty_{{ l.pk }}" value="{{ l.qty_to_order }}" aria-label="К заказу {{ l.code_1c }}"></td>
+      {% if stat.has_cost %}<td class="num">{% if l.value_to_order %}{{ l.value_to_order|floatformat:0 }}{% else %}—{% endif %}</td>{% endif %}
       <td><span class="status status-{{ l.status }}">{{ l.get_status_display }}</span></td>
     </tr>
   {% empty %}
-    <tr><td colspan="11" class="note">По выбранным условиям заказывать нечего. Снимите фильтры или выберите «Все рассчитанные».</td></tr>
+    <tr><td colspan="12" class="note">По выбранным условиям заказывать нечего. Снимите фильтры или выберите «Все рассчитанные».</td></tr>
   {% endfor %}
   </tbody>
 </table>

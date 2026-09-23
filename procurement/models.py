@@ -46,6 +46,7 @@ class OrderLine(models.Model):
     details = models.JSONField("Детали расчёта", default=dict)
     status = models.CharField("Статус", max_length=16, choices=STATUS_CHOICES, default="new")
     needs_review = models.BooleanField("Требует проверки", default=False)
+    cost = models.FloatField("Себестоимость единицы", null=True, blank=True)
 
     class Meta:
         ordering = ["supplier", "-days_of_cover"]
@@ -57,3 +58,7 @@ class OrderLine(models.Model):
     @property
     def qty_to_order(self):
         return self.qty_final if self.qty_final is not None else self.qty_recommended
+
+    @property
+    def value_to_order(self):
+        return self.cost * self.qty_to_order if self.cost else None

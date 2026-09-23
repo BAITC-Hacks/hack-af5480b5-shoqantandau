@@ -1,0 +1,38 @@
+{% extends "procurement/base.html" %}
+{% load procurement_extras %}
+{% block content %}
+<h1>Точность прогноза на истории</h1>
+<p class="lead">Проверка задним числом: за каждый из последних 6 месяцев сервис делает прогноз так, будто сегодня 1-е число этого месяца и дальнейшие продажи неизвестны. Прогноз сравнивается с фактом и с тем, как считают в Excel, — средним продаж за 12 месяцев.</p>
+
+<form method="post">{% csrf_token %}
+  <button class="btn" type="submit" onclick="this.textContent='Считаю… около 1,5 минуты'; this.form.classList.add('busy')">{% if res %}Пересчитать{% else %}Запустить бэктест{% endif %}</button>
+  <span class="note">{% if res %}Посчитано {{ res.created }}.{% else %}Занимает около 1,5 минуты.{% endif %}</span>
+</form>
+
+{% for r in rows %}
+<section class="panel" style="margin-top:20px">
+  <h2>{{ r.name }}</h2>
+  <table class="grid">
+    <thead><tr><th>Показатель</th><th class="num">Сервис</th><th class="num">Excel (среднее за 12 мес.)</th><th>Что значит</th></tr></thead>
+    <tbody>
+      <tr><td>Ошибка прогноза (WAPE)</td><td class="num"><b>{{ r.service.wape|pct }}</b></td><td class="num">{{ r.excel.wape|pct }}</td>
+          <td class="note">Сумма ошибок по всем артикулам к сумме фактических продаж. Меньше — лучше.</td></tr>
+      <tr><td>Смещение</td><td class="num"><b>{{ r.service.bias|pct_signed }}</b></td><td class="num">{{ r.excel.bias|pct_signed }}</td>
+          <td class="note">«+» — прогноз в сумме выше факта (риск излишков), «−» — ниже (его покрывает страховой запас).</td></tr>
+      <tr><td>Перепрогноз, ед.</td><td class="num"><b>{{ r.service.over|floatformat:0 }}</b></td><td class="num">{{ r.excel.over|floatformat:0 }}</td>
+          <td class="note">Сколько единиц за 6 месяцев предсказано сверх продаж — это кандидат в лишний запас.{% if r.over_cut %} У сервиса на {{ r.over_cut|pct }} меньше.{% endif %}</td></tr>
+      <tr><td>Недопрогноз, ед.</td><td class="num">{{ r.service.under|floatformat:0 }}</td><td class="num">{{ r.excel.under|floatformat:0 }}</td>
+          <td class="note">Сколько продаж не было предсказано. В заказе дополнительно закладывается страховой запас.</td></tr>
+    </tbody>
+  </table>
+  <details><summary>По месяцам</summary>
+    <table class="grid">
+      <thead><tr><th>Месяц</th><th class="num">Артикулов</th><th class="num">Продано, ед.</th><th class="num">WAPE сервиса</th><th class="num">WAPE Excel</th></tr></thead>
+      <tbody>{% for m in r.per_month %}<tr><td>{{ m.month }}</td><td class="num">{{ m.sku }}</td><td class="num">{{ m.fact|floatformat:0 }}</td>
+        <td class="num">{{ m.service|pct }}</td><td class="num">{{ m.excel|pct }}</td></tr>{% endfor %}</tbody>
+    </table>
+  </details>
+</section>
+{% endfor %}
+<p class="note">Сравнивается только прогноз спроса. В заказе поверх прогноза учитываются страховой запас, остатки, товар в пути и кратность.</p>
+{% endblock %}

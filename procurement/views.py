@@ -17,9 +17,11 @@ def _data_status():
     result = []
     for key, sup in constants.SUPPLIERS.items():
         files = []
+        resolved = loaders.resolve_files(key)
         for kind, fname in constants.DATA_FILES.items():
-            path = sup["dir"] / fname
+            path = resolved[kind]
             files.append({"kind": kind, "name": fname, "exists": path.exists(),
+                          "uploaded": loaders.UPLOAD_DIR in path.parents,
                           "size_kb": round(path.stat().st_size / 1024) if path.exists() else 0})
         result.append({"key": key, "name": sup["name"], "files": files,
                        "ready": all(f["exists"] for f in files)})
@@ -37,7 +39,51 @@ def index(request):
             s["warnings"] = data.warnings
         except Exception as exc:  # показываем ошибку разбора файла, а не падаем
             s["error"] = f"{type(exc).__name__}: {exc}"
-    return render(request, "procurement/index.html", {"suppliers": suppliers})
+    kinds = {"sales_transactions": "Динамика продаж (накладные)", "sales_monthly": "Ежемесячные продажи",
+             "stock_monthly": "Ежемесячные остатки", "in_transit": "Товар в пути", "moq": "MOQ / кратность",
+             "seasonality": "Сезонность"}
+    return render(request, "procurement/index.html", {"suppliers": suppliers, "kinds": kinds,
+                                                      "has_uploads": loaders.UPLOAD_DIR.exists()})
+
+
+@require_POST
+def upload_data(request):
+    """Загрузка новой выгрузки 1С вместо демо-файла. Если файл не разбирается — откат."""
+    sup = request.POST.get("supplier")
+    kind = request.POST.get("kind")
+    f = request.FILES.get("file")
+    if sup not in constants.SUPPLIERS or kind not in constants.DATA_FILES or not f:
+        messages.error(request, "Выберите поставщика, тип выгрузки и xlsx-файл.")
+        return redirect("procurement:index")
+    if not f.name.lower().endswith(".xlsx"):
+        messages.error(request, "Нужен файл .xlsx — выгрузка из 1С в Excel.")
+        return redirect("procurement:index")
+    target = loaders.UPLOAD_DIR / sup / constants.DATA_FILES[kind]
+    target.parent.mkdir(parents=True, exist_ok=True)
+    backup = target.read_bytes() if target.exists() else None
+    with open(target, "wb") as out:
+        for chunk in f.chunks():
+            out.write(chunk)
+    try:
+        loaders.get_supplier(sup, use_cache=False)
+    except Exception as exc:
+        if backup is None:
+            target.unlink(missing_ok=True)
+        else:
+            target.write_bytes(backup)
+        messages.error(request, f"Файл не подходит по формату, оставлены прежние данные. Ошибка: {exc}")
+        return redirect("procurement:index")
+    messages.success(request, f"{constants.SUPPLIERS[sup]['name']}: загружен «{f.name}» как {constants.DATA_FILES[kind]}. "
+                              f"Следующий расчёт использует новые данные.")
+    return redirect("procurement:index")
+
+
+@require_POST
+def reset_uploads(request):
+    shutil.rmtree(loaders.UPLOAD_DIR, ignore_errors=True)
+    shutil.rmtree(loaders.CACHE_DIR, ignore_errors=True)
+    messages.info(request, "Загруженные файлы удалены, используются демо-данные партнёра.")
+    return redirect("procurement:index")
 
 
 @require_POST
@@ -218,6 +264,7 @@ def run_detail(request, pk):
         "run": run, "active": active, "tabs": [(k, run.stats.get(k, {})) for k in sup_keys],
         "stat": run.stats.get(active, {}), "page": page, "show": show, "urgency": urgency, "q": q,
         "status": status, "approved": run.lines.filter(supplier=active, status="approved").count(),
+        "value_saved": (run.stats.get(active, {}).get("value_raw", 0) or 0) - (run.stats.get(active, {}).get("value_total", 0) or 0),
         "ai_label": llm.provider_label() if llm.is_enabled() else "",
     })
 
@@ -239,7 +286,7 @@ def export_run(request, pk):
     wb = Workbook()
     wb.remove(wb.active)
     headers = ["Код 1С", "Артикул поставщика", "Наименование", "Количество", "Ед.", "Кратность",
-               "Срочность", "Остаток", "В пути", "Рекомендовано системой", "Обоснование"]
+               "Срочность", "Остаток", "В пути", "Рекомендовано системой", "Себестоимость, ₸", "Сумма, ₸", "Обоснование"]
     total = 0
     for key in [k for k in run.supplier.split(",") if k and (not only or k == only)]:
         qs = run.lines.filter(supplier=key)
@@ -253,12 +300,10 @@ def export_run(request, pk):
                 continue
             ws.append([l.code_1c, l.article, l.name, l.qty_to_order, (l.details or {}).get("unit", "шт"),
                        l.moq, l.get_urgency_display(), round(l.stock), round(l.in_transit),
-                       l.qty_recommended, l.reason])
+                       l.qty_recommended, l.cost, round(l.value_to_order, 2) if l.value_to_order else None, l.reason])
             total += 1
-        for col, w in zip("ABCDEFGHIJK", [14, 22, 60, 12, 6, 10, 11, 10, 10, 14, 100]):
+        for col, w in zip("ABCDEFGHIJKLM", [14, 22, 60, 12, 6, 10, 11, 10, 10, 14, 14, 14, 100]):
             ws.column_dimensions[col].width = w
-        for row in ws.iter_rows(min_row=2, min_col=11, max_col=11):
-            row[0].alignment = Alignment(wrap_text=False)
         ws.freeze_panes = "A2"
     if total == 0 and scope == "approved":
         messages.error(request, "Нет утверждённых позиций. Отметьте позиции и нажмите «Утвердить», "
@@ -357,3 +402,24 @@ def explain_line(request, pk):
     line.reason_ai = text
     line.save(update_fields=["reason_ai"])
     return JsonResponse({"text": text, "source": source})
+
+
+# ---------- бэктест ----------
+
+from . import backtest  # noqa: E402
+
+
+def backtest_view(request):
+    if request.method == "POST":
+        backtest.run()
+        messages.success(request, "Бэктест пересчитан.")
+        return redirect("procurement:backtest")
+    res = backtest.load()
+    rows = []
+    if res:
+        for key, v in res["suppliers"].items():
+            sv, ex = v["summary"].get("service", {}), v["summary"].get("excel", {})
+            rows.append({"name": v["name"], "service": sv, "excel": ex, "per_month": v["per_month"],
+                         "over_cut": (1 - sv["over"] / ex["over"]) if ex.get("over") else None,
+                         "wape_gain": (ex["wape"] - sv["wape"]) if ex.get("wape") is not None else None})
+    return render(request, "procurement/backtest.html", {"res": res, "rows": rows})

@@ -10,3 +10,4 @@ exports/
 .idea/
 .vscode/
 data/cache/
+data/uploads/

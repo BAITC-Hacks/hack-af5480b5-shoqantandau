@@ -1,0 +1,49 @@
+{% extends "procurement/base.html" %}
+{% block content %}
+<h1>Расчёт заказов поставщикам</h1>
+<p class="lead">Сервис считает потребность по каждому артикулу и предлагает количество к заказу. Заказ никуда не отправляется — вы проверяете и утверждаете его сами.</p>
+
+<form method="post" class="panel form-grid">{% csrf_token %}
+  <label>Поставщик
+    <select name="supplier">
+      <option value="">Все поставщики</option>
+      {% for k, s in suppliers.items %}<option value="{{ k }}">{{ s.name }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Группа товаров <small>(начало кода 1С, например 0302)</small>
+    <input name="category" placeholder="все">
+  </label>
+  <label>Срок поставки, дн. <small>(пусто — из данных)</small>
+    <input name="lead_time_days" type="number" min="1" placeholder="авто">
+  </label>
+  <label>Период между заказами, дн.
+    <input name="review_days" type="number" min="1" value="{{ review_days }}">
+  </label>
+  <label>Плановый прирост, % г/г <small>(пусто — по истории)</small>
+    <input name="growth_plan_pct" type="number" step="1" placeholder="по истории">
+  </label>
+  <fieldset>
+    <legend>Учитывать</legend>
+    <label class="check"><input type="checkbox" name="use_outliers" checked> исключать разовые крупные заказы</label>
+    <label class="check"><input type="checkbox" name="use_stockout" checked> восстанавливать спрос в периоды дефицита</label>
+    <label class="check"><input type="checkbox" name="use_seasonality" checked> сезонность</label>
+    <label class="check"><input type="checkbox" name="use_growth" checked> рост спроса</label>
+  </fieldset>
+  <div><button class="btn" type="submit">Рассчитать заказы</button>
+    <p class="note">Расчёт по всем поставщикам занимает 10–30 секунд.</p></div>
+</form>
+
+{% if runs %}
+<h2 style="margin-top:28px">Предыдущие расчёты</h2>
+<table class="grid">
+  <thead><tr><th>Расчёт</th><th>Поставщики</th><th>Группа</th><th class="num">Позиций к заказу</th></tr></thead>
+  <tbody>
+  {% for r in runs %}
+    <tr><td><a href="{% url 'procurement:run_detail' r.pk %}">#{{ r.pk }} от {{ r.created_at|date:"d.m.Y H:i" }}</a></td>
+        <td>{{ r.supplier }}</td><td>{{ r.category|default:"все" }}</td>
+        <td class="num">{% for k, s in r.stats.items %}{{ s.name }}: {{ s.sku_to_order }}{% if not forloop.last %}, {% endif %}{% endfor %}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

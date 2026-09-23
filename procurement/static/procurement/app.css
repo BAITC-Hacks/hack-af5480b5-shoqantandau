@@ -55,3 +55,27 @@ details summary { cursor: pointer; color: var(--accent); margin: 8px 0; }
 .two-col section { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 20px; overflow-x: auto; }
 .row-stockout td { background: #fdf1e3; }
 @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 20px; }
+.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px 24px; align-items: end; }
+.form-grid label { display: flex; flex-direction: column; gap: 4px; font-weight: 500; }
+.form-grid small { font-weight: 400; color: var(--muted); }
+.form-grid input, .form-grid select, .filters input, .filters select { padding: 8px 10px; border: 1px solid var(--line); border-radius: 4px; font: inherit; background: #fff; }
+fieldset { border: 1px solid var(--line); border-radius: 4px; padding: 10px 14px; grid-column: span 2; }
+legend { font-weight: 500; padding: 0 4px; }
+.form-grid label.check { flex-direction: row; align-items: center; gap: 8px; font-weight: 400; }
+.tabs { display: flex; gap: 4px; border-bottom: 2px solid var(--line); margin: 16px 0 20px; }
+.tabs a { padding: 8px 16px; text-decoration: none; color: var(--muted); border-bottom: 3px solid transparent; margin-bottom: -2px; font-weight: 600; }
+.tabs a.on { color: var(--ink); border-bottom-color: var(--ink); }
+.tabs a span { font-weight: 400; background: var(--line); border-radius: 10px; padding: 0 7px; font-size: 13px; margin-left: 4px; }
+.filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.table-wrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
+.orders td { padding: 8px; }
+.orders .qty { font-size: 17px; font-weight: 700; }
+.urg { font-size: 13px; font-weight: 600; white-space: nowrap; }
+.urg-high { color: var(--high); } .urg-medium { color: var(--medium); } .urg-low { color: var(--low); }
+.u-high td:first-child { box-shadow: inset 4px 0 0 var(--high); }
+.u-medium td:first-child { box-shadow: inset 4px 0 0 var(--medium); }
+.why summary { font-size: 13px; margin: 2px 0 0; }
+.why p { font-size: 13px; color: var(--muted); max-width: 75ch; margin: 4px 0 0; }
+.pager { display: flex; gap: 16px; align-items: center; }
+@media (max-width: 640px) { fieldset { grid-column: auto; } }

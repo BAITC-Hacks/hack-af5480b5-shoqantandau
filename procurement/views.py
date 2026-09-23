@@ -83,3 +83,66 @@ def sku_search(request):
                 results.append({"supplier_key": key, "supplier": constants.SUPPLIERS[key]["name"],
                                 "code": code, "name": r["name"], "article": r["article"]})
     return render(request, "procurement/search.html", {"q": q, "results": results})
+
+
+# ---------- расчёт ----------
+
+from django.core.paginator import Paginator  # noqa: E402
+from django.shortcuts import get_object_or_404  # noqa: E402
+
+from . import engine, services  # noqa: E402
+from .models import CalculationRun  # noqa: E402
+
+
+def _num(v, cast=float):
+    try:
+        return cast(v) if v not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def run_form(request):
+    if request.method == "POST":
+        f = request.POST
+        params = engine.Params(
+            lead_time_days=_num(f.get("lead_time_days"), int),
+            review_days=_num(f.get("review_days"), int) or constants.REVIEW_PERIOD_DAYS,
+            growth_plan_pct=_num(f.get("growth_plan_pct")),
+            category=f.get("category", "").strip(),
+            use_outliers=bool(f.get("use_outliers")),
+            use_stockout=bool(f.get("use_stockout")),
+            use_seasonality=bool(f.get("use_seasonality")),
+            use_growth=bool(f.get("use_growth")),
+        )
+        sup = f.get("supplier") or ""
+        run = services.run_calculation(params, [sup] if sup in constants.SUPPLIERS else None)
+        return redirect("procurement:run_detail", run.pk)
+    return render(request, "procurement/run_form.html", {
+        "suppliers": constants.SUPPLIERS, "review_days": constants.REVIEW_PERIOD_DAYS,
+        "runs": CalculationRun.objects.all()[:10],
+    })
+
+
+def run_detail(request, pk):
+    run = get_object_or_404(CalculationRun, pk=pk)
+    sup_keys = [k for k in run.supplier.split(",") if k]
+    active = request.GET.get("supplier") or (sup_keys[0] if sup_keys else "")
+    show = request.GET.get("show", "order")
+    urgency = request.GET.get("urgency", "")
+    q = request.GET.get("q", "").strip()
+
+    lines = run.lines.filter(supplier=active)
+    if show == "order":
+        lines = lines.filter(qty_recommended__gt=0)
+    if urgency:
+        lines = lines.filter(urgency=urgency)
+    if q:
+        from django.db.models import Q
+        lines = lines.filter(Q(code_1c__icontains=q) | Q(name__icontains=q) | Q(article__icontains=q))
+    order = {"high": 0, "medium": 1, "low": 2}
+    lines = sorted(lines, key=lambda x: (order.get(x.urgency, 3), x.days_of_cover or 0))
+    page = Paginator(lines, 100).get_page(request.GET.get("page"))
+    return render(request, "procurement/run_detail.html", {
+        "run": run, "active": active, "tabs": [(k, run.stats.get(k, {})) for k in sup_keys],
+        "stat": run.stats.get(active, {}), "page": page, "show": show, "urgency": urgency, "q": q,
+    })

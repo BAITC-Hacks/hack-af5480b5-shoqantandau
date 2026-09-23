@@ -1,0 +1,62 @@
+{% extends "procurement/base.html" %}
+{% block content %}
+<p class="crumbs"><a href="{% url 'procurement:run_form' %}">Расчёт заказов</a> / #{{ run.pk }} от {{ run.created_at|date:"d.m.Y H:i" }}</p>
+<h1>Рекомендованные заказы</h1>
+
+<nav class="tabs">
+  {% for k, s in tabs %}
+    <a href="?supplier={{ k }}" class="{% if k == active %}on{% endif %}">{{ s.name }} <span>{{ s.sku_to_order }}</span></a>
+  {% endfor %}
+</nav>
+
+<dl class="facts">
+  <div><dt>Позиций к заказу</dt><dd>{{ stat.sku_to_order }} из {{ stat.sku_calculated }}</dd></div>
+  <div><dt>Всего единиц</dt><dd>{{ stat.qty_total }}</dd></div>
+  <div><dt>Срочных</dt><dd>{{ stat.high }}</dd></div>
+  <div><dt>Срок поставки</dt><dd>{{ stat.lead_time_days }} дн.</dd></div>
+  <div><dt>Найдено разовых заказов</dt><dd>{{ stat.one_offs }} арт.</dd></div>
+  <div><dt>Учтён дефицит</dt><dd>{{ stat.stockouts }} арт.</dd></div>
+</dl>
+
+<form class="filters" method="get">
+  <input type="hidden" name="supplier" value="{{ active }}">
+  <select name="show"><option value="order" {% if show == "order" %}selected{% endif %}>Только к заказу</option>
+    <option value="all" {% if show == "all" %}selected{% endif %}>Все рассчитанные</option></select>
+  <select name="urgency"><option value="">Любая срочность</option>
+    <option value="high" {% if urgency == "high" %}selected{% endif %}>Высокая</option>
+    <option value="medium" {% if urgency == "medium" %}selected{% endif %}>Средняя</option>
+    <option value="low" {% if urgency == "low" %}selected{% endif %}>Низкая</option></select>
+  <input type="search" name="q" value="{{ q }}" placeholder="Код, артикул, название">
+  <button class="btn btn-ghost" type="submit">Показать</button>
+</form>
+
+<div class="table-wrap">
+<table class="grid orders">
+  <thead><tr><th>Срочность</th><th>Код 1С</th><th>Наименование</th><th class="num">Остаток</th><th class="num">В пути</th>
+    <th class="num">Спрос/мес</th><th class="num">Дней хватит</th><th class="num">Рекомендовано</th></tr></thead>
+  <tbody>
+  {% for l in page %}
+    <tr class="u-{{ l.urgency }}">
+      <td><span class="urg urg-{{ l.urgency }}">{{ l.get_urgency_display }}</span></td>
+      <td><a href="{% url 'procurement:sku_detail' l.supplier l.code_1c %}">{{ l.code_1c }}</a><br><small>{{ l.article }}</small></td>
+      <td>{{ l.name }}
+        <details class="why"><summary>Почему столько</summary><p>{{ l.reason }}</p></details></td>
+      <td class="num">{{ l.stock|floatformat:0 }}</td><td class="num">{{ l.in_transit|floatformat:0 }}</td>
+      <td class="num">{{ l.regular_demand|floatformat:1 }}</td>
+      <td class="num">{% if l.days_of_cover >= 9999 %}—{% else %}{{ l.days_of_cover|floatformat:0 }}{% endif %}</td>
+      <td class="num qty">{{ l.qty_recommended }}</td>
+    </tr>
+  {% empty %}
+    <tr><td colspan="8" class="note">По выбранным условиям заказывать нечего. Снимите фильтры или выберите «Все рассчитанные».</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% if page.has_other_pages %}
+<p class="pager">
+  {% if page.has_previous %}<a href="?supplier={{ active }}&show={{ show }}&urgency={{ urgency }}&q={{ q }}&page={{ page.previous_page_number }}">Назад</a>{% endif %}
+  Страница {{ page.number }} из {{ page.paginator.num_pages }}
+  {% if page.has_next %}<a href="?supplier={{ active }}&show={{ show }}&urgency={{ urgency }}&q={{ q }}&page={{ page.next_page_number }}">Дальше</a>{% endif %}
+</p>
+{% endif %}
+{% endblock %}

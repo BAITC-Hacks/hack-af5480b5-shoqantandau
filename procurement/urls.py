@@ -1,10 +1,14 @@
 from django.urls import path
 
 from . import views
+from . import agent_views
 
 app_name = "procurement"
 
 urlpatterns = [
+    path("agent/", agent_views.page, name="agent"),
+    path("agent/ask/", agent_views.ask, name="agent_ask"),
+    path("agent/reset/", agent_views.reset, name="agent_reset"),
     path("", views.run_form, name="run_form"),
     path("data/", views.index, name="index"),
     path("run/<int:pk>/", views.run_detail, name="run_detail"),

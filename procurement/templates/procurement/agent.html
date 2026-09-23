@@ -1,0 +1,44 @@
+{% extends "procurement/base.html" %}
+{% load static %}
+{% block title %}AI-агент закупщика{% endblock %}
+{% block content %}
+<style>
+ .agent-layout{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:24px}.agent-message{white-space:pre-wrap;line-height:1.6;overflow-wrap:anywhere}.agent-turn{padding:22px;border:1px solid #dce4ed;border-radius:16px;background:#fff;margin-bottom:16px}.agent-turn.user{background:#eef4ff;margin-left:36px}.agent-turn.error{border-color:#bd3e42;color:#92262a}.agent-role{font-size:.8rem;font-weight:700;color:#53657d;margin-bottom:9px}.agent-tools summary{cursor:pointer;font-weight:600}.agent-tools pre{max-height:280px;overflow:auto;font-size:.78rem;white-space:pre-wrap;background:#f4f7fb;padding:12px;border-radius:8px}.agent-source{display:inline-block;margin:4px 6px 4px 0;font-size:.85rem}.agent-starters{display:flex;flex-wrap:wrap;gap:8px}.agent-status{min-height:24px}.agent-side{align-self:start}.agent-side p{font-size:.9rem}.agent-compose textarea{min-height:90px}.agent-empty{padding:30px 10px;text-align:center;color:#64748b}@media(max-width:900px){.agent-layout{grid-template-columns:1fr}.agent-side{order:-1}.agent-turn.user{margin-left:12px}}
+</style>
+<div class="d-flex justify-content-between align-items-start gap-3 mb-3">
+ <div><h1>AI-агент закупщика</h1><p class="lead mb-0">Находит риски, проверяет расчёт и сравнивает варианты закупки.</p></div>
+ <span class="badge {% if enabled %}text-bg-success{% else %}text-bg-warning{% endif %}">{% if enabled %}Ключ подключён{% else %}Нужен API-ключ{% endif %}</span>
+</div>
+<div class="agent-layout">
+ <section>
+  <div class="panel mb-3">
+   <label class="form-label fw-semibold" for="agent-supplier">Данные какого поставщика анализировать</label>
+   <select id="agent-supplier" class="form-select mb-3">{% for key,supplier in suppliers.items %}<option value="{{ key }}" {% if key == initial_supplier %}selected{% endif %}>{{ supplier.name }}</option>{% endfor %}</select>
+   <div class="agent-starters">
+    <button class="btn btn-sm btn-outline-primary starter" data-question="Проверь риски дефицита. Где нужна закупка, а где достаточно ускорить уже заказанный товар?">Риски дефицита</button>
+    <button class="btn btn-sm btn-outline-primary starter" data-question="Найди товары с запасом более 180 дней и объясни, почему их не нужно докупать сейчас.">Избыток на складе</button>
+    <button class="btn btn-sm btn-outline-primary starter" data-question="Найди вентилятор и конвектор, сравни их спрос и условный заказ в январе и июле.">Зима и лето</button>
+    <button class="btn btn-sm btn-outline-primary starter" data-question="Для товара 3301002_ сравни базовый заказ с вариантом: срок поставки 30 дней вместо 20. Объясни разницу.">Поставка на 10 дней дольше</button>
+   </div>
+   <p class="small text-muted mt-2 mb-0">Примеры про вентилятор и код 3301002_ рассчитаны на ТехноСезон. Для других поставщиков укажите их товар.</p>
+  </div>
+  <div id="agent-chat" aria-live="polite"><div class="agent-empty" id="agent-empty">Задайте вопрос или выберите пример выше.<br>В ответе появятся выводы, карточки товаров и результаты инструментов.</div></div>
+  <form id="agent-form" class="panel agent-compose" data-url="{% url 'procurement:agent_ask' %}" data-reset="{% url 'procurement:agent_reset' %}">{% csrf_token %}
+   <label for="agent-message" class="form-label">Ваш вопрос</label>
+   <textarea id="agent-message" class="form-control mb-3" maxlength="1500" required placeholder="Например: почему заказ нулевой, а товар отмечен срочным?" {% if not can_ask %}disabled{% endif %}></textarea>
+   <div class="d-flex gap-2 align-items-center flex-wrap"><button id="agent-send" class="btn btn-primary" {% if not can_ask %}disabled{% endif %}>Спросить агента</button><button id="agent-reset" type="button" class="btn btn-outline-secondary" {% if not can_ask %}disabled{% endif %}>Новый диалог</button><span id="agent-status" class="agent-status small text-muted" role="status"></span></div>
+  </form>
+ </section>
+ <aside class="panel agent-side">
+  <h2 class="h5">Ответы с проверяемыми числами</h2>
+  <p>Модель выбирает инструменты. Прогноз и количество считает существующий алгоритм. Под ответом можно раскрыть полученные данные.</p>
+  <p>Используются текущие файлы и стандартные настройки. Ручные правки сохранённых заказов не входят в этот расчёт.</p>
+  <p>Сценарии не меняют данные. Утверждение и экспорт остаются в разделе «Заказы».</p>
+  <hr><h3 class="h6">Оценка расхода агента</h3><p id="agent-budget" class="mb-2">Учтено ${{ budget.accounted_usd|floatformat:4 }} из ${{ budget.limit_usd|floatformat:2 }}</p>
+  <p class="small text-muted">Локальный лимит только этого агента. Незавершённый запрос резервирует до $0.10. Оценка по токенам без скидок за кэш; это не баланс аккаунта OpenAI. Модель: {{ model }}.</p>
+  <hr><p class="small text-muted mb-0">В OpenAI передаются ваш вопрос и агрегаты выбранных товаров. Исходные Excel-файлы и ID клиентов не передаются. ТехноСезон содержит синтетические данные.</p>
+  {% if not can_ask %}<div class="alert alert-info mt-3 mb-0">Вызов AI доступен менеджеру и администратору.</div>{% endif %}
+ </aside>
+</div>
+{% endblock %}
+{% block scripts %}{{ initial_history|json_script:"agent-history" }}<script src="{% static 'procurement/agent.js' %}"></script>{% endblock %}

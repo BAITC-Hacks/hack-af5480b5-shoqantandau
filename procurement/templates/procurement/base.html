@@ -12,13 +12,14 @@
 </head>
 <body>
 {% block body %}
-  <nav class="navbar navbar-expand-xl navbar-dark app-nav">
+  <nav class="navbar navbar-expand-xxl navbar-dark app-nav">
     <div class="container-xl">
       <a class="navbar-brand" href="{% url 'procurement:run_form' %}"><i class="bi bi-box-seam me-2"></i>Заказы поставщикам<small>пополнение склада · Электрокомплект</small></a>
       <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#nav" aria-controls="nav" aria-expanded="false" aria-label="Меню"><span class="navbar-toggler-icon"></span></button>
       {% with u=request.resolver_match.url_name %}
       <div class="collapse navbar-collapse" id="nav">
         <ul class="navbar-nav me-auto gap-1 ms-lg-3">
+          <li class="nav-item"><a class="nav-link {% if u == 'agent' %}active{% endif %}" href="{% url 'procurement:agent' %}"><i class="bi bi-chat-dots me-1"></i>AI-агент</a></li>
           <li class="nav-item"><a class="nav-link {% if u == 'run_form' or u == 'run_detail' %}active{% endif %}" href="{% url 'procurement:run_form' %}"><i class="bi bi-cart-check me-1"></i>Заказы</a></li>
           <li class="nav-item"><a class="nav-link {% if u == 'sku_search' or u == 'sku_detail' %}active{% endif %}" href="{% url 'procurement:sku_search' %}"><i class="bi bi-search me-1"></i>Товары</a></li>
           <li class="nav-item"><a class="nav-link {% if u == 'check' %}active{% endif %}" href="{% url 'procurement:check' %}"><i class="bi bi-lightbulb me-1"></i>Как считается</a></li>

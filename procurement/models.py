@@ -2,6 +2,23 @@ from django.conf import settings
 from django.db import models
 
 
+class AgentBudget(models.Model):
+    """Local agent budget including conservative reservations for pending calls."""
+    accounted_micro = models.PositiveBigIntegerField(default=0)
+
+
+class AgentCall(models.Model):
+    created_at = models.DateTimeField(auto_now_add=True)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL)
+    supplier = models.CharField(max_length=32)
+    model = models.CharField(max_length=64)
+    input_tokens = models.PositiveIntegerField(default=0)
+    output_tokens = models.PositiveIntegerField(default=0)
+    accounted_micro = models.PositiveIntegerField(default=100000)
+    actual_micro = models.PositiveIntegerField(null=True)
+    status = models.CharField(max_length=32, default='pending')
+
+
 class CalculationRun(models.Model):
     """Один запуск расчёта рекомендованных заказов."""
 

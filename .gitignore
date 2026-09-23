@@ -1,5 +1,6 @@
 local_constants.py
 .env
+.openai-key
 venv/
 .venv/
 __pycache__/

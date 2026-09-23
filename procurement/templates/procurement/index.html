@@ -1,21 +1,46 @@
 {% extends "procurement/base.html" %}
 {% block content %}
-<h1>Исходные данные</h1>
-<p class="lead">Выгрузки из 1С по поставщикам. Расчёт заказов использует все шесть файлов каждого поставщика.</p>
+<div class="head-row">
+  <div>
+    <h1>Исходные данные</h1>
+    <p class="lead">Выгрузки из 1С по поставщикам. Расчёт заказов использует все шесть файлов каждого поставщика.</p>
+  </div>
+  <form method="post" action="{% url 'procurement:reload' %}">{% csrf_token %}
+    <button class="btn btn-ghost" type="submit">Перечитать файлы</button>
+  </form>
+</div>
 
 <div class="suppliers">
 {% for s in suppliers %}
   <section class="supplier">
     <h2>{{ s.name }} {% if s.ready %}<span class="tag ok">все файлы на месте</span>{% else %}<span class="tag bad">не хватает файлов</span>{% endif %}</h2>
-    <table class="grid">
-      <thead><tr><th>Файл</th><th class="num">Размер, КБ</th><th>Статус</th></tr></thead>
-      <tbody>
-      {% for f in s.files %}
-        <tr><td>{{ f.name }}</td><td class="num">{{ f.size_kb }}</td>
-            <td>{% if f.exists %}есть{% else %}<b class="bad-text">нет</b>{% endif %}</td></tr>
-      {% endfor %}
-      </tbody>
-    </table>
+
+    {% if s.error %}<div class="flash flash-error">Не удалось разобрать файлы: {{ s.error }}</div>{% endif %}
+    {% if s.summary %}
+    <dl class="facts">
+      <div><dt>Артикулов</dt><dd>{{ s.summary.sku }}</dd></div>
+      <div><dt>С продажами</dt><dd>{{ s.summary.sku_with_sales }}</dd></div>
+      <div><dt>Строк накладных</dt><dd>{{ s.summary.lines }}</dd></div>
+      <div><dt>Накладных</dt><dd>{{ s.summary.docs }}</dd></div>
+      <div><dt>Период продаж</dt><dd>{{ s.summary.date_from|date:"d.m.Y" }} – {{ s.summary.date_to|date:"d.m.Y" }}</dd></div>
+      <div><dt>В пути</dt><dd>{{ s.summary.in_transit_sku }} арт. / {{ s.summary.in_transit_qty|floatformat:0 }} ед.</dd></div>
+      <div><dt>Срок поставки</dt><dd>{{ s.summary.lead_time_days }} дн. <small>({{ s.summary.lead_time_source }})</small></dd></div>
+    </dl>
+    {% for w in s.warnings %}<p class="note">{{ w }}</p>{% endfor %}
+    {% endif %}
+
+    <details>
+      <summary>Файлы</summary>
+      <table class="grid">
+        <thead><tr><th>Файл</th><th class="num">Размер, КБ</th><th>Статус</th></tr></thead>
+        <tbody>
+        {% for f in s.files %}
+          <tr><td>{{ f.name }}</td><td class="num">{{ f.size_kb }}</td>
+              <td>{% if f.exists %}есть{% else %}<b class="bad-text">нет</b>{% endif %}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </details>
   </section>
 {% endfor %}
 </div>

@@ -79,3 +79,16 @@ legend { font-weight: 500; padding: 0 4px; }
 .why p { font-size: 13px; color: var(--muted); max-width: 75ch; margin: 4px 0 0; }
 .pager { display: flex; gap: 16px; align-items: center; }
 @media (max-width: 640px) { fieldset { grid-column: auto; } }
+.spacer { flex: 1; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 0 0 10px; }
+.actions .note { margin: 0 0 0 8px; }
+.qty-input { width: 86px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; font: inherit; text-align: right; font-weight: 600; }
+.qty-input.edited { border-color: var(--medium); background: #fff8ec; }
+.status { font-size: 13px; white-space: nowrap; }
+.status-approved { color: var(--low); font-weight: 600; }
+.status-rejected { color: var(--muted); text-decoration: line-through; }
+.st-approved td { background: #f1f8f3; }
+.st-rejected td { opacity: .6; }
+.row-base td { background: #eef2fb; }
+.up { color: var(--high); font-weight: 600; } .down { color: var(--low); font-weight: 600; }
+h2 small { font-size: 14px; font-weight: 400; }

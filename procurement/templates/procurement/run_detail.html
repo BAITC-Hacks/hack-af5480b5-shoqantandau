@@ -26,37 +26,64 @@
     <option value="high" {% if urgency == "high" %}selected{% endif %}>Высокая</option>
     <option value="medium" {% if urgency == "medium" %}selected{% endif %}>Средняя</option>
     <option value="low" {% if urgency == "low" %}selected{% endif %}>Низкая</option></select>
+  <select name="status"><option value="">Любой статус</option>
+    <option value="new" {% if status == "new" %}selected{% endif %}>Новые</option>
+    <option value="approved" {% if status == "approved" %}selected{% endif %}>Утверждённые</option>
+    <option value="rejected" {% if status == "rejected" %}selected{% endif %}>Отклонённые</option></select>
   <input type="search" name="q" value="{{ q }}" placeholder="Код, артикул, название">
   <button class="btn btn-ghost" type="submit">Показать</button>
+  <span class="spacer"></span>
+  <a class="btn" href="{% url 'procurement:export_run' run.pk %}?supplier={{ active }}">Выгрузить утверждённое ({{ approved }})</a>
+  <a class="btn btn-ghost" href="{% url 'procurement:export_run' run.pk %}?supplier={{ active }}&scope=draft">Черновик: все рекомендации</a>
 </form>
 
+<form method="post" id="orders-form">{% csrf_token %}
+<div class="actions">
+  <button class="btn" name="action" value="approve">Утвердить отмеченные</button>
+  <button class="btn btn-ghost" name="action" value="reject">Отклонить отмеченные</button>
+  <button class="btn btn-ghost" name="action" value="reset">Вернуть в работу</button>
+  <button class="btn btn-ghost" name="action" value="save">Сохранить количества</button>
+  <span class="note">Измените количество в колонке «К заказу», отметьте строки и утвердите. Поставщику ничего не отправляется.</span>
+</div>
 <div class="table-wrap">
 <table class="grid orders">
-  <thead><tr><th>Срочность</th><th>Код 1С</th><th>Наименование</th><th class="num">Остаток</th><th class="num">В пути</th>
-    <th class="num">Спрос/мес</th><th class="num">Дней хватит</th><th class="num">Рекомендовано</th></tr></thead>
+  <thead><tr><th><input type="checkbox" id="sel-all" aria-label="Отметить все"></th><th>Срочность</th><th>Код 1С</th><th>Наименование</th>
+    <th class="num">Остаток</th><th class="num">В пути</th><th class="num">Спрос/мес</th><th class="num">Дней хватит</th>
+    <th class="num">Рекомендовано</th><th class="num">К заказу</th><th>Статус</th></tr></thead>
   <tbody>
   {% for l in page %}
-    <tr class="u-{{ l.urgency }}">
+    <tr class="u-{{ l.urgency }} st-{{ l.status }}">
+      <td><input type="checkbox" name="sel" value="{{ l.pk }}" aria-label="Отметить {{ l.code_1c }}"></td>
       <td><span class="urg urg-{{ l.urgency }}">{{ l.get_urgency_display }}</span></td>
       <td><a href="{% url 'procurement:sku_detail' l.supplier l.code_1c %}">{{ l.code_1c }}</a><br><small>{{ l.article }}</small></td>
       <td>{{ l.name }}
-        <details class="why"><summary>Почему столько</summary><p>{{ l.reason }}</p></details></td>
+        <details class="why"><summary>Почему столько</summary><p>{{ l.reason }}</p>
+          <p><a href="{% url 'procurement:check' %}?supplier={{ l.supplier }}&code={{ l.code_1c }}">Проверить сценарии для этого артикула</a></p></details></td>
       <td class="num">{{ l.stock|floatformat:0 }}</td><td class="num">{{ l.in_transit|floatformat:0 }}</td>
       <td class="num">{{ l.regular_demand|floatformat:1 }}</td>
       <td class="num">{% if l.days_of_cover >= 9999 %}—{% else %}{{ l.days_of_cover|floatformat:0 }}{% endif %}</td>
       <td class="num qty">{{ l.qty_recommended }}</td>
+      <td class="num"><input class="qty-input{% if l.qty_final is not None %} edited{% endif %}" type="number" min="0" step="{{ l.moq|floatformat:0 }}"
+            name="qty_{{ l.pk }}" value="{{ l.qty_to_order }}" aria-label="К заказу {{ l.code_1c }}"></td>
+      <td><span class="status status-{{ l.status }}">{{ l.get_status_display }}</span></td>
     </tr>
   {% empty %}
-    <tr><td colspan="8" class="note">По выбранным условиям заказывать нечего. Снимите фильтры или выберите «Все рассчитанные».</td></tr>
+    <tr><td colspan="11" class="note">По выбранным условиям заказывать нечего. Снимите фильтры или выберите «Все рассчитанные».</td></tr>
   {% endfor %}
   </tbody>
 </table>
 </div>
+</form>
+<script>
+  document.getElementById('sel-all')?.addEventListener('change', e => {
+    document.querySelectorAll('input[name=sel]').forEach(c => c.checked = e.target.checked);
+  });
+</script>
 {% if page.has_other_pages %}
 <p class="pager">
-  {% if page.has_previous %}<a href="?supplier={{ active }}&show={{ show }}&urgency={{ urgency }}&q={{ q }}&page={{ page.previous_page_number }}">Назад</a>{% endif %}
+  {% if page.has_previous %}<a href="?supplier={{ active }}&show={{ show }}&urgency={{ urgency }}&status={{ status }}&q={{ q }}&page={{ page.previous_page_number }}">Назад</a>{% endif %}
   Страница {{ page.number }} из {{ page.paginator.num_pages }}
-  {% if page.has_next %}<a href="?supplier={{ active }}&show={{ show }}&urgency={{ urgency }}&q={{ q }}&page={{ page.next_page_number }}">Дальше</a>{% endif %}
+  {% if page.has_next %}<a href="?supplier={{ active }}&show={{ show }}&urgency={{ urgency }}&status={{ status }}&q={{ q }}&page={{ page.next_page_number }}">Дальше</a>{% endif %}
 </p>
 {% endif %}
 {% endblock %}

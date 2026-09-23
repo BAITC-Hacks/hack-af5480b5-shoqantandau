@@ -123,8 +123,42 @@ def run_form(request):
     })
 
 
+def _apply_edits(request, run):
+    """Сохранить правки количества и/или изменить статус выбранных строк."""
+    action = request.POST.get("action", "save")
+    ids = [int(x) for x in request.POST.getlist("sel") if x.isdigit()]
+    changed = 0
+    for key, val in request.POST.items():
+        if not key.startswith("qty_"):
+            continue
+        line_id = _num(key[4:], int)
+        new = _num(val, int)
+        if line_id is None:
+            continue
+        line = run.lines.filter(pk=line_id).first()
+        if line is None:
+            continue
+        final = None if new is None or new == line.qty_recommended else max(new, 0)
+        if final != line.qty_final:
+            line.qty_final = final
+            line.save(update_fields=["qty_final"])
+            changed += 1
+    if action in ("approve", "reject", "reset") and ids:
+        status = {"approve": "approved", "reject": "rejected", "reset": "new"}[action]
+        n = run.lines.filter(pk__in=ids).update(status=status)
+        label = {"approve": "Утверждено", "reject": "Отклонено", "reset": "Возвращено в работу"}[action]
+        messages.success(request, f"{label} позиций: {n}.")
+    elif action in ("approve", "reject", "reset"):
+        messages.error(request, "Отметьте позиции галочками, затем нажмите кнопку.")
+    elif changed:
+        messages.success(request, f"Сохранено изменений количества: {changed}.")
+
+
 def run_detail(request, pk):
     run = get_object_or_404(CalculationRun, pk=pk)
+    if request.method == "POST":
+        _apply_edits(request, run)
+        return redirect(request.get_full_path())
     sup_keys = [k for k in run.supplier.split(",") if k]
     active = request.GET.get("supplier") or (sup_keys[0] if sup_keys else "")
     show = request.GET.get("show", "order")
@@ -136,6 +170,9 @@ def run_detail(request, pk):
         lines = lines.filter(qty_recommended__gt=0)
     if urgency:
         lines = lines.filter(urgency=urgency)
+    status = request.GET.get("status", "")
+    if status:
+        lines = lines.filter(status=status)
     if q:
         from django.db.models import Q
         lines = lines.filter(Q(code_1c__icontains=q) | Q(name__icontains=q) | Q(article__icontains=q))
@@ -145,4 +182,111 @@ def run_detail(request, pk):
     return render(request, "procurement/run_detail.html", {
         "run": run, "active": active, "tabs": [(k, run.stats.get(k, {})) for k in sup_keys],
         "stat": run.stats.get(active, {}), "page": page, "show": show, "urgency": urgency, "q": q,
+        "status": status, "approved": run.lines.filter(supplier=active, status="approved").count(),
     })
+
+
+# ---------- экспорт ----------
+
+import io  # noqa: E402
+
+from django.http import HttpResponse  # noqa: E402
+from openpyxl import Workbook  # noqa: E402
+from openpyxl.styles import Alignment, Font  # noqa: E402
+
+
+def export_run(request, pk):
+    """Выгрузка в xlsx: лист на каждого поставщика, по умолчанию только утверждённые позиции."""
+    run = get_object_or_404(CalculationRun, pk=pk)
+    scope = request.GET.get("scope", "approved")
+    only = request.GET.get("supplier")
+    wb = Workbook()
+    wb.remove(wb.active)
+    headers = ["Код 1С", "Артикул поставщика", "Наименование", "Количество", "Ед.", "Кратность",
+               "Срочность", "Остаток", "В пути", "Рекомендовано системой", "Обоснование"]
+    total = 0
+    for key in [k for k in run.supplier.split(",") if k and (not only or k == only)]:
+        qs = run.lines.filter(supplier=key)
+        qs = qs.filter(status="approved") if scope == "approved" else qs.filter(qty_recommended__gt=0).exclude(status="rejected")
+        ws = wb.create_sheet(constants.SUPPLIERS.get(key, {}).get("name", key)[:31])
+        ws.append(headers)
+        for c in ws[1]:
+            c.font = Font(bold=True)
+        for l in qs.order_by("code_1c"):
+            if l.qty_to_order <= 0:
+                continue
+            ws.append([l.code_1c, l.article, l.name, l.qty_to_order, (l.details or {}).get("unit", "шт"),
+                       l.moq, l.get_urgency_display(), round(l.stock), round(l.in_transit),
+                       l.qty_recommended, l.reason])
+            total += 1
+        for col, w in zip("ABCDEFGHIJK", [14, 22, 60, 12, 6, 10, 11, 10, 10, 14, 100]):
+            ws.column_dimensions[col].width = w
+        for row in ws.iter_rows(min_row=2, min_col=11, max_col=11):
+            row[0].alignment = Alignment(wrap_text=False)
+        ws.freeze_panes = "A2"
+    if total == 0 and scope == "approved":
+        messages.error(request, "Нет утверждённых позиций. Отметьте позиции и нажмите «Утвердить», "
+                                "или выгрузите черновик со всеми рекомендациями.")
+        return redirect("procurement:run_detail", pk)
+    buf = io.BytesIO()
+    wb.save(buf)
+    name = f"zakaz_{pk}_{'utverzhden' if scope == 'approved' else 'chernovik'}.xlsx"
+    resp = HttpResponse(buf.getvalue(), content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    resp["Content-Disposition"] = f'attachment; filename="{name}"'
+    return resp
+
+
+# ---------- проверка для экспертов ----------
+
+DEMO_CODES = {"iek": "030201020_", "se": "300200294_"}  # артикулы для демонстрации по умолчанию
+
+
+def check_scenarios(request):
+    """Один артикул в нескольких сценариях: видно, как каждый источник данных влияет на результат."""
+    g = request.GET
+    sup = g.get("supplier", "iek") if g.get("supplier") in constants.SUPPLIERS else "iek"
+    code = (g.get("code") or DEMO_CODES.get(sup, "")).strip()
+    data = loaders.get_supplier(sup)
+    ctx = {"suppliers": constants.SUPPLIERS, "sup": sup, "code": code, "g": g}
+    if code not in data.items.index:
+        ctx["error"] = f"Артикул {code} не найден у поставщика {data.name}."
+        return render(request, "procurement/check.html", ctx)
+
+    base_p = dict(codes=[code])
+    base = engine.calculate(data, engine.Params(**base_p))
+    if base.empty:
+        ctx["error"] = "У артикула нет продаж за последние 12 месяцев — заказ не рассчитывается."
+        return render(request, "procurement/check.html", ctx)
+    b = base.iloc[0]
+    item = data.items.loc[code]
+    big_qty = _num(g.get("big_qty")) or max(round(b["regular_demand"] * 10), 50)
+    transit_add = _num(g.get("transit_add")) or max(round(b["qty_recommended"] / 2), 10)
+    stock_val = _num(g.get("stock_val"))
+    stock_val = stock_val if stock_val is not None else float(item["stock_now"]) + transit_add
+    growth = _num(g.get("growth")) if g.get("growth") not in (None, "") else 30.0
+    last_month = (pd.Period(data.data_date, freq="M") - 2).start_time + pd.Timedelta(days=10)
+    test_order = [{"code": code, "qty": big_qty, "date": str(last_month.date()), "doc": "ТЕСТ-РАЗОВЫЙ"}]
+
+    scen = [
+        ("base", "Базовый расчёт", "Все данные как есть", {}),
+        ("oneoff", f"+ разовая продажа {big_qty:.0f} шт.", "Требование 4: заказ исключается, рекомендация почти не меняется",
+         {"test_orders": test_order}),
+        ("oneoff_raw", f"+ разовая продажа {big_qty:.0f} шт., без очистки", "Для сравнения: так посчитал бы Excel по сырым продажам",
+         {"test_orders": test_order, "use_outliers": False}),
+        ("transit", f"+ {transit_add:.0f} в пути", "Требование 1: товар в пути уменьшает заказ",
+         {"overrides": {code: {"in_transit": float(item["in_transit"]) + transit_add}}}),
+        ("stock", f"Остаток = {stock_val:.0f}", "Требование 1: остаток уменьшает заказ",
+         {"overrides": {code: {"stock_now": stock_val}}}),
+        ("growth", f"Плановый прирост {growth:+.0f}% г/г", "Требование 1: прогноз по приросту", {"growth_plan_pct": growth}),
+        ("no_stockout", "Без учёта дефицита", "Требование 3: без восстановления упущенного спроса", {"use_stockout": False}),
+        ("no_season", "Без сезонности", "Требование 2: сезонный индекс против среднего", {"use_seasonality": False}),
+    ]
+    rows = []
+    for key, title, hint, extra in scen:
+        r = b if key == "base" else engine.calculate(data, engine.Params(**base_p, **extra)).iloc[0]
+        rows.append({"key": key, "title": title, "hint": hint, "qty": int(r["qty_recommended"]),
+                     "delta": int(r["qty_recommended"]) - int(b["qty_recommended"]),
+                     "demand": r["regular_demand"], "forecast": r["forecast"], "reason": r["reason"]})
+    ctx.update({"rows": rows, "item": item, "base": b, "big_qty": big_qty, "transit_add": transit_add,
+                "stock_val": stock_val, "growth": growth, "supplier_name": data.name})
+    return render(request, "procurement/check.html", ctx)

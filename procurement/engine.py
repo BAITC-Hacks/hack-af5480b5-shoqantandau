@@ -54,6 +54,7 @@ class Params:
     use_growth: bool = True
     growth_plan_pct: float | None = None       # плановый прирост, % г/г; None = по истории
     category: str = ""                         # фильтр по группе (первые цифры кода 1С)
+    codes: list[str] = field(default_factory=list)  # расчёт только по этим артикулам
     # для проверки экспертами: подмешать тестовые продажи и переопределить остатки/в пути
     test_orders: list[dict] = field(default_factory=list)   # [{code, qty, date, doc}]
     overrides: dict[str, dict] = field(default_factory=dict)  # {code: {stock_now, in_transit}}
@@ -184,6 +185,8 @@ def calculate(data: SupplierData, params: Params | None = None) -> pd.DataFrame:
                 items.loc[code, k_] = float(v)
     if p.category:
         items = items[items["category"].astype(str).str.startswith(p.category)]
+    if p.codes:
+        items = items[items.index.isin(p.codes)]
 
     sup_idx = supplier_seasonal_index(data.seasonality) if p.use_seasonality else np.ones(12)
     sup_growth = supplier_growth(data.seasonality, last_full) if p.use_growth else 1.0

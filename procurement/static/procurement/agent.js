@@ -3,12 +3,32 @@
  const input=document.getElementById('agent-message'), supplier=document.getElementById('agent-supplier');
  const send=document.getElementById('agent-send'), reset=document.getElementById('agent-reset'), status=document.getElementById('agent-status');
  const csrf=form.querySelector('[name=csrfmiddlewaretoken]').value;
+ const sendLabel=send.textContent;
  let busy=false;
  function element(tag,text,className){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(className)e.className=className;return e;}
  function message(role,text){document.getElementById('agent-empty')?.remove();const box=element('article',undefined,'agent-turn '+role);box.append(element('div',role==='user'?'Вы':role==='error'?'Запрос не выполнен':'AI-агент','agent-role'),element('div',text,'agent-message'));chat.append(box);return box;}
  const remembered=JSON.parse(document.getElementById('agent-history').textContent);remembered.forEach(m=>message(m.role,m.content));
  function budget(b){if(b)document.getElementById('agent-budget').textContent=`Учтено $${b.accounted_usd.toFixed(4)} из $${b.limit_usd.toFixed(2)}`;}
- function controls(on){busy=on;send.disabled=on;reset.disabled=on;supplier.disabled=on;document.querySelectorAll('.starter').forEach(b=>b.disabled=on);}
+ function controls(on){
+  busy=on;send.disabled=on;reset.disabled=on;supplier.disabled=on;chat.setAttribute('aria-busy',String(on));
+  send.replaceChildren();
+  if(on){const spinner=element('span',undefined,'spinner-border spinner-border-sm agent-wait-spinner me-2');spinner.setAttribute('aria-hidden','true');send.append(spinner,document.createTextNode('Готовит ответ…'));}
+  else send.textContent=sendLabel;
+  document.querySelectorAll('.starter').forEach(b=>b.disabled=on);
+ }
+ function startWaiting(){
+  const box=element('article',undefined,'agent-turn agent-wait');
+  const spinner=element('span',undefined,'spinner-border text-primary agent-wait-spinner');spinner.setAttribute('aria-hidden','true');
+  const content=element('div',undefined,'agent-wait-content');
+  const hint=element('div','Обычно это занимает 10–40 секунд.','small text-muted');
+  const elapsed=element('div','Ожидание: 0 с','agent-wait-time');elapsed.setAttribute('aria-hidden','true');
+  content.append(element('div','AI-агент готовит ответ','fw-semibold mb-1'),hint,elapsed);
+  box.append(spinner,content);chat.append(box);
+  box.scrollIntoView({block:'nearest',behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});
+  const started=Date.now();
+  const timer=setInterval(()=>{const seconds=Math.floor((Date.now()-started)/1000);elapsed.textContent=`Ожидание: ${seconds} с`;if(seconds>=40)hint.textContent='Запрос ещё выполняется. Не обновляйте страницу.';},1000);
+  return ()=>{clearInterval(timer);box.remove();};
+ }
  async function post(url,body){const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-CSRFToken':csrf},body:JSON.stringify(body)});let data;try{data=await r.json();}catch{throw new Error('Сервер не вернул ответ. Обновите страницу и проверьте вход.');}return {r,data};}
  async function clear(){const {r,data}=await post(form.dataset.reset,{});if(!r.ok)throw new Error(data.error||'Не удалось начать новый диалог.');chat.replaceChildren();input.value='';status.textContent='Новый диалог';}
  reset.addEventListener('click',async()=>{if(busy)return;try{await clear();}catch(e){status.textContent=e.message;}});
@@ -16,7 +36,8 @@
  document.querySelectorAll('.starter').forEach(button=>button.addEventListener('click',()=>{if(busy||input.disabled)return;input.value=button.dataset.question;input.focus();}));
  form.addEventListener('submit',async event=>{
   event.preventDefault();if(busy)return;const question=input.value.trim();if(!question)return;
-  message('user',question);input.value='';controls(true);status.textContent='Агент анализирует данные… Обычно 10–40 секунд.';
+  message('user',question);input.value='';controls(true);status.textContent='Ожидаем ответ AI-агента…';
+  const stopWaiting=startWaiting();
   try{
    const {r,data}=await post(form.dataset.url,{message:question,supplier:supplier.value});budget(data.budget);
    if(!r.ok)throw new Error(data.error||'Запрос не выполнен.');
@@ -32,6 +53,6 @@
    if(data.trace.length){const details=element('details',undefined,'agent-tools mt-3');details.append(element('summary',`Проверить действия агента (${data.trace.length})`));data.trace.forEach(t=>{details.append(element('h3',t.label,'h6 mt-3'),element('pre',JSON.stringify({parameters:t.arguments,result:t.result},null,2)));});box.append(details);}
    status.textContent='Готово. Можно задать уточняющий вопрос.';
   }catch(error){message('error',error.message);status.textContent='Основной расчёт заказов продолжает работать.';input.value=question;}
-  finally{controls(false);}
+  finally{stopWaiting();controls(false);}
  });
 })();

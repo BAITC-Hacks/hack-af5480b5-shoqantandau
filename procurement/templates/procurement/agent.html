@@ -4,6 +4,7 @@
 {% block content %}
 <style>
  .agent-layout{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:24px}.agent-message{white-space:pre-wrap;line-height:1.6;overflow-wrap:anywhere}.agent-turn{padding:22px;border:1px solid #dce4ed;border-radius:16px;background:#fff;margin-bottom:16px}.agent-turn.user{background:#eef4ff;margin-left:36px}.agent-turn.error{border-color:#bd3e42;color:#92262a}.agent-role{font-size:.8rem;font-weight:700;color:#53657d;margin-bottom:9px}.agent-tools summary{cursor:pointer;font-weight:600}.agent-tools pre{max-height:280px;overflow:auto;font-size:.78rem;white-space:pre-wrap;background:#f4f7fb;padding:12px;border-radius:8px}.agent-source{display:inline-block;margin:4px 6px 4px 0;font-size:.85rem}.agent-starters{display:flex;flex-wrap:wrap;gap:8px}.agent-status{min-height:24px}.agent-side{align-self:start}.agent-side p{font-size:.9rem}.agent-compose textarea{min-height:90px}.agent-empty{padding:30px 10px;text-align:center;color:#64748b}@media(max-width:900px){.agent-layout{grid-template-columns:1fr}.agent-side{order:-1}.agent-turn.user{margin-left:12px}}
+ .agent-wait{display:flex;align-items:center;gap:18px;background:linear-gradient(110deg,#f0f5ff,#fff);border-color:#c9d8f2;min-height:108px}.agent-wait-spinner{flex-shrink:0}.agent-wait-content{min-width:0}.agent-wait-time{font-size:.78rem;color:#64748b;margin-top:8px;font-variant-numeric:tabular-nums}@media(prefers-reduced-motion:reduce){.agent-wait-spinner{animation:none!important}}
 </style>
 <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
  <div><h1>AI-агент закупщика</h1><p class="lead mb-0">Находит риски, проверяет расчёт и сравнивает варианты закупки.</p></div>
@@ -41,4 +42,4 @@
  </aside>
 </div>
 {% endblock %}
-{% block scripts %}{{ initial_history|json_script:"agent-history" }}<script src="{% static 'procurement/agent.js' %}"></script>{% endblock %}
+{% block scripts %}{{ initial_history|json_script:"agent-history" }}<script src="{% static 'procurement/agent.js' %}?v=20260923-loading"></script>{% endblock %}

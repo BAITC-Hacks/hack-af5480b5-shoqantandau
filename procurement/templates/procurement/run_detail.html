@@ -5,7 +5,7 @@
   <div>
     <nav aria-label="breadcrumb"><ol class="breadcrumb mb-1"><li class="breadcrumb-item"><a href="{% url 'procurement:run_form' %}">Заказы</a></li><li class="breadcrumb-item active">от {{ run.created_at|date:"d.m.Y, H:i" }}</li></ol></nav>
     <h1 class="mb-0">Заказ от {{ run.created_at|date:"d.m.Y, H:i" }}</h1>
-    <div class="text-muted small">Рассчитал: {% if run.created_by %}{{ run.created_by.get_full_name|default:run.created_by.username }}{% else %}—{% endif %}</div>
+    <div class="text-muted small">Данные на {{ stat.data_date }} · Рассчитал: {% if run.created_by %}{{ run.created_by.get_full_name|default:run.created_by.username }}{% else %}—{% endif %}</div>
   </div>
   {% if can_export %}
   <div class="text-end">
@@ -24,16 +24,19 @@
 </ul>
 
 <div class="row g-3 mb-3">
-  <div class="col-6 col-lg"><div class="kpi"><i class="bi bi-cart"></i><div class="v">{{ stat.sku_to_order|num }}</div><div class="t">товаров нужно заказать</div></div></div>
+  <div class="col-6 col-lg"><div class="kpi"><i class="bi bi-cart"></i><div class="v">{{ current_count|num }}</div><div class="t">позиций в заказе с учётом правок</div></div></div>
   <div class="col-6 col-lg"><div class="kpi red"><i class="bi bi-alarm"></i><div class="v">{{ stat.high|num }}</div><div class="t">закончатся раньше, чем придёт поставка</div></div></div>
   {% if stat.has_cost %}
-  <div class="col-6 col-lg"><div class="kpi"><i class="bi bi-cash-stack"></i><div class="v">{{ stat.value_total|money }}</div><div class="t">сумма заказа по себестоимости</div></div></div>
-  <div class="col-6 col-lg"><div class="kpi green"><i class="bi bi-piggy-bank"></i><div class="v">{{ value_saved|money }}</div><div class="t">не заморожено в лишнем запасе (без очистки данных было бы {{ stat.value_raw|money }})</div></div></div>
+  <div class="col-6 col-lg"><div class="kpi"><i class="bi bi-cash-stack"></i><div class="v">{{ current_value|money }}</div><div class="t">по себестоимости, после сохранённых правок</div></div></div>
+  <div class="col-6 col-lg"><div class="kpi"><i class="bi bi-arrow-left-right"></i><div class="v">{{ value_saved|money }}</div><div class="t">разница рекомендаций: без очистки минус с очисткой. Это оценка, не подтверждённая экономия.</div></div></div>
   {% else %}
-  <div class="col-6 col-lg"><div class="kpi green"><i class="bi bi-piggy-bank"></i><div class="v">{{ qty_saved|num }} шт.</div><div class="t">меньше лишнего запаса, чем без очистки данных</div></div></div>
+  <div class="col-6 col-lg"><div class="kpi"><i class="bi bi-filter-circle"></i><div class="v">{{ stat.one_offs|num }}</div><div class="t">позиций с исключёнными всплесками спроса</div></div></div>
   {% endif %}
   {% if stat.review %}<div class="col-6 col-lg"><div class="kpi orange"><i class="bi bi-exclamation-triangle"></i><div class="v">{{ stat.review|num }}</div><div class="t">стоит проверить вручную</div></div></div>{% endif %}
 </div>
+
+{% if stat.warnings %}<details class="panel mb-3"><summary>Качество данных и допущения расчёта — проверить перед утверждением</summary>
+<ul class="mt-2 mb-0">{% for warning in stat.warnings %}<li>{{ warning }}</li>{% endfor %}</ul></details>{% endif %}
 
 <div class="toolbar mb-2">
   <div class="btn-group flex-wrap" role="group" aria-label="Что показать">
@@ -85,14 +88,13 @@
 <script src="{% static 'procurement/table.js' %}"></script>
 <script>
   const CAN_EDIT = {{ can_edit|yesno:"true,false" }}, HAS_COST = {{ stat.has_cost|yesno:"true,false" }};
-  const SUP = "{{ active }}";
   const data = JSON.parse(document.getElementById('rows-data').textContent);
   const selected = new Set(), edits = {};
   const urgText = {high: 'срочно', medium: 'заказать сейчас', low: 'запас есть'};
   const statusHtml = s => s === 'approved' ? '<span class="pill ok"><i class="bi bi-check2"></i> утверждён</span>'
     : s === 'rejected' ? '<span class="pill grey">не заказываем</span>' : '<span class="pill grey">ждёт решения</span>';
   const VIEWS = {
-    order: r => r.rec > 0, urgent: r => r.rec > 0 && r.urg === 'high', review: r => r.review,
+    order: r => r.qty > 0 && r.status !== 'rejected', urgent: r => r.urg === 'high', review: r => r.review,
     approved: r => r.status === 'approved', all: r => true,
   };
   document.querySelectorAll('[data-count]').forEach(b => b.textContent = data.filter(VIEWS[b.dataset.count]).length.toLocaleString('ru'));
@@ -140,6 +142,11 @@
   tbody.addEventListener('input', e => {
     if (!e.target.classList.contains('qty-input')) return;
     const id = +e.target.dataset.id; edits[id] = e.target.value; e.target.classList.add('edited');
+    const row = data.find(r => r.id === id);
+    if (HAS_COST && row?.cost != null) {
+      const sumCell = e.target.closest('td').nextElementSibling;
+      sumCell.textContent = fmt(Number(e.target.value) * row.cost);
+    }
     selected.add(id); const cb = e.target.closest('tr').querySelector('.sel'); if (cb) cb.checked = true; updateSel();
   });
   document.getElementById('sel-all')?.addEventListener('change', e => {
@@ -162,11 +169,19 @@
     const cols = tr.children.length;
     tr.insertAdjacentHTML('afterend', `<tr class="why-row"><td colspan="${cols}"><div class="why-box"><div class="spinner-border spinner-border-sm text-primary"></div></div></td></tr>`);
     const box = tr.nextElementSibling.querySelector('.why-box');
-    const j = await (await fetch(`/line/${btn.dataset.id}/reason/`)).json();
+    let j;
+    try {
+      const response = await fetch(`/line/${btn.dataset.id}/reason/`);
+      if (!response.ok) throw new Error('request');
+      j = await response.json();
+    } catch (error) {
+      box.textContent = 'Не удалось загрузить объяснение. Закройте строку и попробуйте снова.';
+      return;
+    }
     box.innerHTML = `<ul>${j.sentences.map(s => `<li>${esc(s)}</li>`).join('')}</ul>
       ${j.who ? `<div class="small text-muted mt-2"><i class="bi bi-person-check me-1"></i>${esc(j.who)}</div>` : ''}
       <div class="ai-slot">${j.ai ? `<p class="ai-text">${esc(j.ai)}</p>` : ''}</div>
-      <div class="why-links"><button type="button" class="btn btn-link btn-sm p-0 explain" data-id="${btn.dataset.id}"><i class="bi bi-chat-square-text me-1"></i>Объяснить простыми словами</button>
+      <div class="why-links">${CAN_EDIT ? `<button type="button" class="btn btn-link btn-sm p-0 explain" data-id="${btn.dataset.id}"><i class="bi bi-chat-square-text me-1"></i>Объяснить простыми словами</button>` : ''}
         <a href="/sku/${j.supplier}/${encodeURIComponent(j.code)}/"><i class="bi bi-graph-up me-1"></i>График продаж</a>
         <a href="/check/?supplier=${j.supplier}&code=${encodeURIComponent(j.code)}"><i class="bi bi-lightbulb me-1"></i>Что будет, если…</a></div>`;
   });
@@ -175,7 +190,7 @@
     b.disabled = true; b.textContent = 'Формулирую…';
     try {
       const j = await (await fetch(`/line/${b.dataset.id}/explain/`, {method: 'POST', headers: {'X-CSRFToken': csrf}})).json();
-      b.closest('.why-box').querySelector('.ai-slot').innerHTML = `<p class="ai-text">${esc(j.text)}</p>`;
+      b.closest('.why-box').querySelector('.ai-slot').innerHTML = `<p class="ai-text">${esc(j.text)}</p><div class="note">Источник: ${esc(j.source)}</div>`;
       b.textContent = 'Сформулировать ещё раз';
     } catch (err) { b.textContent = 'Не получилось — попробовать снова'; }
     b.disabled = false;

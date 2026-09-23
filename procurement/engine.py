@@ -17,19 +17,18 @@
     Не восстанавливается, если товара нет LONG_STOCKOUT_MONTHS+ месяцев подряд до текущей даты
     (похоже, позиция не закупается) или в названии пометка «!!!» — такие позиции помечаются «проверить».
  4. Сезонность. Индекс по месяцу года: по поставщику — отношение продаж к центрированной
-    12-месячной скользящей средней (так тренд не искажает сезонность); по артикулу — то же на его
-    очищенном спросе, если истории достаточно; по группе товаров — тем же методом на суммарных
+    12-месячной скользящей средней; по артикулу — средние очищенные продажи по месяцам года,
+    если истории достаточно; по группе товаров — скользящая средняя на суммарных
     продажах группы. Итог — смесь: артикул 50%, группа 25%, поставщик 25% (без своей истории —
     группа и поставщик поровну).
  5. Рост. Отношение последних 12 месяцев к предыдущим 12 — смесь артикула, группы и поставщика
     в тех же долях, либо плановый прирост, заданный менеджером.
  6. База = среднее десезонализированного очищенного спроса за HISTORY_MONTHS месяцев.
  7. Прогноз на горизонт (срок поставки + период между заказами) = база x сезонность x рост по дням.
-    Страховой запас = z x sigma x sqrt(срок поставки / 30), sigma = max(1.4826*MAD, sqrt(база)) —
+    Страховой запас = z x sigma x sqrt(горизонт / 30), sigma = max(1.4826*MAD, sqrt(база)) —
     устойчива к выбросам.
- 8. К заказу = прогноз + страховой запас - остаток - в пути, округлено вверх до кратности.
- 9. Срочность: сколько дней хватит остатка (+ товара, который придёт до новой поставки)
-    в сравнении со сроком поставки.
+ 8. К заказу = прогноз + страховой запас - остаток - поставки в горизонте, вверх до кратности.
+ 9. Срочность: первая нехватка при дневном списании спроса и поступлениях в их даты.
 """
 from __future__ import annotations
 
@@ -67,6 +66,28 @@ class Params:
     test_orders: list[dict] = field(default_factory=list)   # [{code, qty, date, doc, monthly_only}]
     overrides: dict[str, dict] = field(default_factory=dict)  # {code: {stock_now, in_transit}}
 
+    def validate(self):
+        for label, value, low, high in [
+            ("Период между заказами", self.review_days, 0, 365),
+            ("История", self.history_months, 1, 36),
+            ("Страховой коэффициент", self.service_z, 0, 4),
+            ("Порог выбросов", self.outlier_k, 1, 20),
+            ("Доля крупного заказа", self.outlier_share, 0, 1),
+        ]:
+            if not isinstance(value, (int, float)) or not math.isfinite(value) or not low <= value <= high:
+                raise ValueError(f"{label}: допустимо от {low} до {high}.")
+        for value in [self.lead_time_days, *self.lead_times.values()]:
+            if value is not None and (not isinstance(value, (int, float)) or not math.isfinite(value)
+                                      or not 1 <= value <= 365 or value != int(value)):
+                raise ValueError("Срок поставки: целое число от 1 до 365 дней.")
+        if self.growth_plan_pct is not None and (not math.isfinite(self.growth_plan_pct)
+                                               or not -100 <= self.growth_plan_pct <= 300):
+            raise ValueError("Прирост: число от −100 до 300 процентов.")
+        for ov in self.overrides.values():
+            for key, value in ov.items():
+                if key != "category" and (not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0):
+                    raise ValueError("Остаток и количество в пути должны быть конечными неотрицательными числами.")
+
     def to_dict(self) -> dict:
         d = self.__dict__.copy()
         d["test_orders"] = [{**o, "date": str(o.get("date"))} for o in self.test_orders]
@@ -79,6 +100,12 @@ def prepare_lines(tx: pd.DataFrame, months: list[pd.Period]) -> dict[str, pd.Dat
         return {}
     t = tx.assign(month=tx["date"].dt.to_period("M"))
     t = t[t["month"].isin(months)]
+    if "client_id" in t.columns:
+        # Join split invoices for the same anonymous customer on the same day.
+        t = t.copy()
+        t["doc"] = [f"клиент {c}" if pd.notna(c) and str(c).strip() else d
+                    for c, d in zip(t["client_id"], t["doc"])]
+        t["date"] = t["date"].dt.normalize()
     lines = t.groupby(["code", "doc", "date", "month"], as_index=False, sort=False, observed=True)["qty"].sum()
     lines["month_tot"] = lines.groupby(["code", "month"], observed=True)["qty"].transform("sum")
     return {c: g for c, g in lines.groupby("code", sort=False)}
@@ -108,11 +135,13 @@ def seasonal_index_from_series(s: pd.Series) -> np.ndarray:
     """s: значения по месяцам (index = Period[M]). Индекс по 12 месяцам (среднее = 1)
     как отношение к центрированной 12-мес. скользящей средней (2x12 MA)."""
     s = s.sort_index()
-    s = s[s > 0]
+    s = s.reindex(pd.period_range(s.index.min(), s.index.max(), freq="M")) if len(s) else s
+    # Keep calendar gaps: dropping zero months would shift the seasonal calendar.
+    s = s.clip(lower=0)
     if len(s) < 18:
         return np.ones(12)
     ma = s.rolling(12, center=True).mean().rolling(2).mean().shift(-1)  # 2x12 MA
-    ratio = (s / ma).dropna()
+    ratio = (s / ma.where(ma > 0)).dropna()
     idx = np.ones(12)
     for m in range(1, 13):
         vals = ratio[[p.month == m for p in ratio.index]]
@@ -242,7 +271,7 @@ def horizon_forecast(daily_base: float, start: date, days: int, idx: np.ndarray,
 
 def days_of_supply(qty: float, daily_base: float, start: date, idx: np.ndarray, growth: float, limit: int = 730) -> float:
     """На сколько дней хватит qty с учётом сезонности (помесячно, внутри месяца — линейно)."""
-    if daily_base <= 0:
+    if daily_base <= 0 or growth <= 0:
         return 9999.0
     left, d, days = qty, start, 0.0
     while days < limit:
@@ -255,6 +284,48 @@ def days_of_supply(qty: float, daily_base: float, start: date, idx: np.ndarray, 
         days += n
         d = nxt
     return 9999.0
+
+
+def supply_schedule(data, code, item, overrides, today, lead, horizon, shipments_by_code):
+    """Keep each shipment's date; late/overdue quantities cannot cover this horizon."""
+    total = max(float(item["in_transit"] or 0), 0.0)
+    flags, schedule = [], []
+    if code in shipments_by_code and "in_transit" not in overrides.get(code, {}):
+        records = shipments_by_code[code]
+    else:
+        arrival = item.get("next_arrival")
+        records = [{"qty": total, "arrival_date": arrival}] if total else []
+    for r in records:
+        qty, arrival = max(float(r["qty"]), 0), r["arrival_date"]
+        if pd.isna(arrival):
+            flags.append("дата товара в пути неизвестна; в сценарии принято прибытие через срок поставки")
+            arrival = today + timedelta(days=lead)
+        else:
+            arrival = pd.Timestamp(arrival).date()
+        if arrival < today:
+            flags.append("есть просроченная поставка; её количество не вычтено до подтверждения новой даты")
+            continue
+        schedule.append((arrival, qty))
+    end = today + timedelta(days=horizon)
+    eligible = sum(q for d, q in schedule if d < end)
+    late = sum(q for d, q in schedule if d >= end)
+    return schedule, eligible, late, list(dict.fromkeys(flags))
+
+
+def first_shortage(stock, schedule, daily_base, start, days, idx, growth):
+    """First fractional day with unmet demand, including receipts on their actual day."""
+    receipts = {}
+    for arrival, q in schedule:
+        receipts[arrival] = receipts.get(arrival, 0) + q
+    available = stock
+    for offset in range(days):
+        d = start + timedelta(days=offset)
+        available += receipts.get(d, 0)
+        demand = daily_base * idx[d.month - 1] * growth
+        if demand > available and demand > 0:
+            return offset + available / demand
+        available -= demand
+    return None
 
 
 # ---------- основной расчёт ----------
@@ -276,6 +347,7 @@ def _build_matrix(data: SupplierData, months: list[pd.Period], col: str) -> pd.D
 
 def calculate(data: SupplierData, params: Params | None = None) -> pd.DataFrame:
     p = params or Params()
+    p.validate()
     today = data.data_date
     cur = pd.Period(today, freq="M")
     last_full = cur - 1
@@ -310,7 +382,12 @@ def calculate(data: SupplierData, params: Params | None = None) -> pd.DataFrame:
     if p.codes:
         items = items[items.index.isin(p.codes)]
 
-    sup_idx = supplier_seasonal_index(data.seasonality) if p.use_seasonality else np.ones(12)
+    completed_season = data.seasonality.copy()
+    for year in completed_season.index:
+        for month in completed_season.columns:
+            if pd.Period(year=int(year), month=int(month), freq="M") > last_full:
+                completed_season.loc[year, month] = np.nan
+    sup_idx = supplier_seasonal_index(completed_season) if p.use_seasonality else np.ones(12)
     sup_growth = supplier_growth(data.seasonality, last_full) if p.use_growth else 1.0
     cat_prof = _memo(data, ("cat", last_full), lambda: category_profiles(data, last_full)) \
         if (p.use_seasonality or p.use_growth) else {}
@@ -324,6 +401,10 @@ def calculate(data: SupplierData, params: Params | None = None) -> pd.DataFrame:
     hist_mask = np.isin(np.arange(len(months)), np.arange(len(months) - len(hist), len(months)))
 
     rows = []
+    exact_stockouts = data.monthly.pivot_table(index="code", columns="month", values="stockout_days", aggfunc="max") \
+        .reindex(columns=months) if "stockout_days" in data.monthly else pd.DataFrame()
+    shipments_by_code = {code: g.to_dict("records") for code, g in data.shipments.groupby("code")} \
+        if not data.shipments.empty else {}
     for code, it in items.iterrows():
         raw = sales.loc[code].to_numpy() if code in sales.index else np.zeros(len(months))
         if raw[hist_mask].sum() <= 0:
@@ -368,6 +449,10 @@ def calculate(data: SupplierData, params: Params | None = None) -> pd.DataFrame:
         stockout_months, added = [], 0.0
         so_open = stock_open.loc[code].to_numpy() if code in stock_open.index else np.ones(len(months) + 1)
         is_so = (so_open[:-1] <= 0) | (so_open[1:] <= 0)
+        exact_days = exact_stockouts.loc[code].to_numpy() if code in exact_stockouts.index else None
+        if exact_days is not None:
+            known = np.isfinite(exact_days)
+            is_so[known] = exact_days[known] > 0
         ok = ~is_so & (clean >= 0)
         deseason = clean / season
         base_ok = deseason[ok & hist_mask].mean() if (ok & hist_mask).any() else (
@@ -387,6 +472,8 @@ def calculate(data: SupplierData, params: Params | None = None) -> pd.DataFrame:
         if p.use_stockout and ok.any():
             for i in np.where(restore)[0]:
                 expected = base_ok * season[i]
+                if exact_days is not None and np.isfinite(exact_days[i]):
+                    expected = clean[i] + base_ok * season[i] * exact_days[i] / months[i].days_in_month
                 if expected > clean[i]:
                     added_i = expected - clean[i]
                     clean[i] = expected
@@ -394,6 +481,12 @@ def calculate(data: SupplierData, params: Params | None = None) -> pd.DataFrame:
                         added += added_i
                         stockout_months.append(f"{MONTH_NAMES[months[i].month - 1]} {months[i].year}")
         flags = []
+        if bool(it.get("stock_estimated", False)):
+            flags.append("остаток оценён без поступлений текущего месяца; сверить с 1С")
+        if bool(it.get("moq_missing", False)):
+            flags.append("кратность не найдена в справочнике; временно принята 1")
+        if it.get("unit") == "м":
+            flags.append("расчёт в метрах; проверить перевод в бухты или упаковки перед заказом")
         if marked:
             flags.append(f"в названии пометка «{constants.DISCONTINUED_MARK}» — возможно, товар выводится из "
                          f"ассортимента")
@@ -420,34 +513,36 @@ def calculate(data: SupplierData, params: Params | None = None) -> pd.DataFrame:
             g_year, g_src = 1.0, "не учитывается"
         # база — средний уровень за окно (середина окна ~ history/2 мес. назад), прогноз — середина горизонта
         lag_months = p.history_months / 2 + horizon / 30 / 2
-        growth = g_year ** (lag_months / 12) if g_year > 0 else 1.0
+        growth = g_year ** (lag_months / 12) if g_year > 0 else 0.0
 
         # 7. прогноз и страховой запас
         forecast, season_h = horizon_forecast(base / 30.0, today, horizon, idx, growth)
-        safety = p.service_z * sigma * math.sqrt(lead / 30.0)
+        safety = p.service_z * sigma * math.sqrt(horizon / 30.0) if growth > 0 else 0.0
 
         # 8. потребность
         stock_now = max(float(it["stock_now"] or 0), 0.0)
         in_transit = max(float(it["in_transit"] or 0), 0.0)
-        need = forecast + safety - stock_now - in_transit
+        schedule, eligible_transit, late_transit, supply_flags = supply_schedule(
+            data, code, it, p.overrides, today, lead, horizon, shipments_by_code)
+        flags.extend(supply_flags)
+        need = forecast + safety - stock_now - eligible_transit
         moq = max(float(it["moq"] or 1), 1.0)
         qty = int(math.ceil(need / moq) * moq) if need > 0 else 0
         qty_calc = qty
-        if marked and p.use_stockout:
+        if marked:
             qty = 0  # помеченные позиции не предлагаем автоматически — решение за менеджером
 
         # 9. срочность
         cover = days_of_supply(stock_now, base / 30.0, today, idx, growth)
-        arrival = it.get("next_arrival")
-        arrives_in_time = pd.notna(arrival) and pd.Timestamp(arrival).date() <= today + timedelta(days=lead)
-        cover_tr = days_of_supply(stock_now + (in_transit if arrives_in_time else 0), base / 30.0, today, idx, growth)
-        urgency = "high" if cover_tr < lead else ("medium" if cover_tr < horizon else "low")
+        shortage = first_shortage(stock_now, schedule, base / 30.0, today, horizon, idx, growth)
+        urgency = "high" if shortage is not None and shortage < lead else (
+            "medium" if qty > 0 or shortage is not None else "low")
 
         # тот же расчёт по «сырым» продажам — без исключения разовых заказов и без учёта дефицита
         des_raw = (raw / season)[hist_mask]
         f_raw, _ = horizon_forecast(float(des_raw.mean()) / 30.0, today, horizon, idx, growth)
-        s_raw = p.service_z * robust_sigma(des_raw, float(des_raw.mean())) * math.sqrt(lead / 30.0)
-        need_raw = f_raw + s_raw - stock_now - in_transit
+        s_raw = p.service_z * robust_sigma(des_raw, float(des_raw.mean())) * math.sqrt(horizon / 30.0) if growth > 0 else 0.0
+        need_raw = f_raw + s_raw - stock_now - eligible_transit
         naive_qty = int(math.ceil(need_raw / moq) * moq) if need_raw > 0 else 0
 
         # обоснование — простым языком, с цифрами (для менеджера, не для программиста)
@@ -455,6 +550,11 @@ def calculate(data: SupplierData, params: Params | None = None) -> pd.DataFrame:
         u = it["unit"]
         if flags:
             reasons.append("Проверьте вручную: " + "; ".join(flags) + ".")
+        if shortage is not None and shortage < lead:
+            reasons.append(f"Риск дефицита через {shortage:.1f} дн., раньше новой поставки. "
+                           "Нужно ускорить поставку или согласовать перемещение со склада.")
+        if late_transit:
+            reasons.append(f"{late_transit:.0f} {it['unit']} в пути придут за пределами горизонта и не уменьшают заказ.")
         now_m = base * idx[today.month - 1]
         reasons.append(f"Обычно продаётся около {_n(base)} {u} в месяц (в среднем за год)"
                        + (f", сейчас по сезону — около {_n(now_m)}." if abs(now_m - base) >= max(1, 0.1 * base) else "."))
@@ -468,8 +568,9 @@ def calculate(data: SupplierData, params: Params | None = None) -> pd.DataFrame:
             reasons.append("Нетипичный всплеск в отчёте продаж сглажен: " + ", ".join(
                 f"{x['label']} (было {x['was']:.0f}, считаем {x['now']:.0f})" for x in sp_in[:3]) + ".")
         if stockout_months:
-            reasons.append(f"Товара не было на складе ({', '.join(stockout_months)}) — продажи тогда были занижены, "
-                           f"к спросу добавлено {_n(added)} {u}.")
+            evidence = "по переданным периодам" if exact_days is not None else "по оценке месячных остатков"
+            reasons.append(f"Товара не было на складе {evidence} ({', '.join(stockout_months)}) — "
+                           f"к спросу добавлена оценка упущенных продаж {_n(added)} {u}.")
         if p.use_seasonality and abs(season_h - 1) >= 0.03:
             reasons.append(f"Сезон: в ближайшие недели продажи обычно на {abs(season_h - 1) * 100:.0f}% "
                            f"{'выше' if season_h > 1 else 'ниже'} среднего.")
@@ -481,7 +582,7 @@ def calculate(data: SupplierData, params: Params | None = None) -> pd.DataFrame:
         pack = f" (с округлением до упаковки по {moq:.0f} {u})" if moq > 1 else ""
         head = (f"На {_days_word(horizon)} ({_days_word(lead)} на поставку + {_days_word(p.review_days)} до следующего "
                 f"заказа) нужно около {forecast:.0f} {u} и {safety:.0f} {u} запаса на случай всплеска. "
-                f"На складе {stock_now:.0f}, в пути {in_transit:.0f}")
+                f"На складе {stock_now:.0f}, в пути до конца горизонта {eligible_transit:.0f} из {in_transit:.0f}")
         if qty_calc > 0:
             reasons.append(f"{head} → заказать {qty_calc} {u}{pack}.")
         else:
@@ -496,6 +597,10 @@ def calculate(data: SupplierData, params: Params | None = None) -> pd.DataFrame:
                         "spikes": spikes, "flags": flags, "category": cat_key,
                         "stockout_months": stockout_months, "growth_year": g_year, "lead": lead,
                         "horizon": horizon, "naive_qty": float(naive_qty), "sigma": sigma})
+        details.update({"eligible_transit": eligible_transit, "late_transit": late_transit,
+                        "stock_estimated": bool(it.get("stock_estimated", False)),
+                        "first_shortage_day": shortage,
+                        "shipments": [{"date": str(d), "qty": q} for d, q in schedule]})
         rows.append({
             "supplier": data.key, "supplier_name": data.name, "code_1c": code, "article": it["article"],
             "name": it["name"], "category": it["category"], "abc_class": it.get("abc_class", ""),

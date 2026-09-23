@@ -2,10 +2,10 @@
 {% load procurement_extras %}
 {% block content %}
 <h1>Точность прогноза на истории</h1>
-<p class="lead">Проверка задним числом: за каждый из последних 6 месяцев сервис делает прогноз так, будто сегодня 1-е число этого месяца и дальнейшие продажи неизвестны. Прогноз сравнивается с фактом и с тем, как считают в Excel, — средним продаж за 12 месяцев.</p>
+<p class="lead">За каждый из последних 6 полных месяцев прогноз строится только по предшествующим продажам. Сравниваем с фактом и простой базой — средним за 12 месяцев. Штуки, метры и упаковки оцениваются отдельно.</p>
 
 <form method="post" data-loading="Проверяем прогноз на истории…" data-loading-text="Около полуминуты: 6 месяцев по двум поставщикам.">{% csrf_token %}
-  <button class="btn btn-primary" type="submit">{% if res %}Пересчитать{% else %}Запустить бэктест{% endif %}</button>
+  {% if perms.procurement.run_calculation %}<button class="btn btn-primary" type="submit">{% if res %}Пересчитать{% else %}Запустить бэктест{% endif %}</button>{% endif %}
   <span class="note">{% if res %}Посчитано {{ res.created }}.{% else %}Занимает около полуминуты.{% endif %}</span>
 </form>
 
@@ -13,16 +13,16 @@
 <section class="panel" style="margin-top:20px">
   <h2>{{ r.name }}</h2>
   <div class="table-card"><div class="table-responsive"><table class="table table-hover align-middle mb-0">
-    <thead><tr><th>Показатель</th><th class="num">Сервис</th><th class="num">Excel (среднее за 12 мес.)</th><th>Что значит</th></tr></thead>
+    <thead><tr><th>Показатель</th><th class="num">Сервис</th><th class="num">Среднее за 12 мес.</th><th>Что значит</th></tr></thead>
     <tbody>
       <tr><td>Ошибка прогноза (WAPE)</td><td class="num"><b>{{ r.service.wape|pct }}</b></td><td class="num">{{ r.excel.wape|pct }}</td>
           <td class="note">Сумма ошибок по всем артикулам к сумме фактических продаж. Меньше — лучше.</td></tr>
       <tr><td>Смещение</td><td class="num"><b>{{ r.service.bias|pct_signed }}</b></td><td class="num">{{ r.excel.bias|pct_signed }}</td>
-          <td class="note">«+» — прогноз в сумме выше факта (риск излишков), «−» — ниже (его покрывает страховой запас).</td></tr>
+          <td class="note">«+» — завышение, «−» — занижение. Страховой запас не гарантирует компенсацию систематической ошибки.</td></tr>
       <tr><td>Перепрогноз, ед.</td><td class="num"><b>{{ r.service.over|floatformat:0 }}</b></td><td class="num">{{ r.excel.over|floatformat:0 }}</td>
-          <td class="note">Сколько единиц за 6 месяцев предсказано сверх продаж — это кандидат в лишний запас.{% if r.over_cut %} У сервиса на {{ r.over_cut|pct }} меньше.{% endif %}</td></tr>
+          <td class="note">Сумма положительных ошибок прогноза. Это не измеренный складской излишек.</td></tr>
       <tr><td>Недопрогноз, ед.</td><td class="num">{{ r.service.under|floatformat:0 }}</td><td class="num">{{ r.excel.under|floatformat:0 }}</td>
-          <td class="note">Сколько продаж не было предсказано. В заказе дополнительно закладывается страховой запас.</td></tr>
+          <td class="note">Сумма отрицательных ошибок прогноза. Не равна фактическим упущенным продажам.</td></tr>
     </tbody>
   </table></div>
   <details><summary>По месяцам</summary>
@@ -35,4 +35,5 @@
 </section>
 {% endfor %}
 <p class="note">Сравнивается только прогноз спроса. В заказе поверх прогноза учитываются страховой запас, остатки, товар в пути и кратность.</p>
+<p class="note">Факт продаж ограничен наличием товара и включает разовые сделки. Поэтому эта проверка не измеряет скрытый спрос или достигнутую экономию. Используется текущий справочник товаров: полного исторического справочника в выгрузках нет.</p>
 {% endblock %}

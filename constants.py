@@ -11,7 +11,7 @@ BASE_DIR = Path(__file__).resolve().parent
 # --- Django ---
 SECRET_KEY = "dev-only-hackalem-not-for-production"
 DEBUG = True
-ALLOWED_HOSTS = ["*"]
+ALLOWED_HOSTS = ["127.0.0.1", "localhost", "testserver"]
 
 # Показывать демо-логины на странице входа (для проверки на хакатоне; в работе — False)
 SHOW_DEMO_USERS = True
@@ -32,6 +32,10 @@ DATA_FILES = {
     "in_transit": "in_transit.xlsx",                  # товар в пути
     "moq": "moq.xlsx",                                # минимальная партия / кратность
     "seasonality": "seasonality.xlsx",                # продажи в деньгах по месяцам
+}
+OPTIONAL_DATA_FILES = {
+    "stock_current": "stock_current.xlsx",  # Код 1с, Свободный остаток, Дата
+    "stockouts": "stockouts.xlsx",          # Код 1с, Начало, Конец (включительно)
 }
 
 # --- Параметры расчёта (значения по умолчанию, меняются в интерфейсе) ---

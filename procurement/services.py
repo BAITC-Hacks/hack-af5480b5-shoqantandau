@@ -7,6 +7,7 @@ import constants
 
 from . import engine, loaders
 from .models import CalculationRun, OrderLine
+from django.db import transaction
 
 
 def _clean(v):
@@ -22,7 +23,9 @@ def _clean(v):
     return v
 
 
+@transaction.atomic
 def run_calculation(params: engine.Params, suppliers: list[str] | None = None, user=None) -> CalculationRun:
+    params.validate()
     keys = suppliers or list(constants.SUPPLIERS)
     run = CalculationRun.objects.create(supplier=",".join(keys), category=params.category,
                                         params=_clean(params.to_dict()),
@@ -35,7 +38,7 @@ def run_calculation(params: engine.Params, suppliers: list[str] | None = None, u
         stats[key] = {
             "name": data.name, "sku_calculated": len(df), "sku_to_order": len(to_order),
             "qty_total": int(to_order["qty_recommended"].sum()) if len(to_order) else 0,
-            "high": int((to_order["urgency"] == "high").sum()) if len(to_order) else 0,
+            "high": int((df["urgency"] == "high").sum()) if len(df) else 0,
             "one_offs": int((df["one_off_removed"] > 0).sum()) if len(df) else 0,
             "stockouts": int((df["stockout_added"] > 0).sum()) if len(df) else 0,
             "lead_time_days": int(params.lead_times.get(key) or params.lead_time_days or data.lead_time_days),
@@ -45,6 +48,7 @@ def run_calculation(params: engine.Params, suppliers: list[str] | None = None, u
             "value_raw": float(df["raw_value"].fillna(0).sum()) if len(df) else 0.0,
             "qty_raw_total": int(df["qty_raw"].sum()) if len(df) else 0,
             "warnings": data.warnings,
+            "data_date": str(data.data_date),
         }
         for r in df.itertuples(index=False):
             lines.append(OrderLine(

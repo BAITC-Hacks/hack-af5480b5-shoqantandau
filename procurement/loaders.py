@@ -30,7 +30,7 @@ MONTHS_RU = {"янв": 1, "фев": 2, "мар": 3, "апр": 4, "май": 5, "�
 MONTHS_GEN = {"января": 1, "февраля": 2, "марта": 3, "апреля": 4, "мая": 5, "июня": 6,
               "июля": 7, "августа": 8, "сентября": 9, "октября": 10, "ноября": 11, "декабря": 12}
 
-CACHE_VERSION = 6
+CACHE_VERSION = 9
 
 
 @dataclass
@@ -44,6 +44,7 @@ class SupplierData:
     orders: pd.DataFrame
     data_date: date
     warnings: list[str] = field(default_factory=list)
+    shipments: pd.DataFrame = field(default_factory=pd.DataFrame)
 
     @property
     def lead_time_source(self) -> str:
@@ -181,6 +182,11 @@ def read_transactions(path: Path) -> pd.DataFrame:
         # в выгрузке знак количества непоследователен — берём модуль
         "qty": pd.to_numeric(df["Количество"], errors="coerce").abs(),
     })
+    # Only explicitly anonymized IDs are accepted. Invoice numbers are not client IDs.
+    for col in ("client_id", "Обезличенный ID клиента", "Клиент ID"):
+        if col in df.columns:
+            out["client_id"] = df[col].map(_norm_code)
+            break
     out = out.dropna(subset=["date", "code", "qty"])
     return out[out["qty"] > 0].reset_index(drop=True)
 
@@ -254,6 +260,7 @@ def read_in_transit(path: Path, data_date: date) -> tuple[pd.DataFrame, pd.DataF
     order_cols = {c: _ORDER_RE.search(str(c).replace("\xa0", " ")) for c in df.columns}
     order_cols = {c: m for c, m in order_cols.items() if m}
     orders, per_sku, extra = [], [], pd.DataFrame({"code": df[code]})
+    shipments = []
 
     if order_cols:  # формат IEK
         qty_parts, arrivals = [], []
@@ -264,6 +271,8 @@ def read_in_transit(path: Path, data_date: date) -> tuple[pd.DataFrame, pd.DataF
             orders.append({"order": str(c).split("(")[0].strip(), "order_date": d0, "arrival_date": d1,
                            "lead_days": (d1 - d0).days, "qty_total": float(q.sum())})
             qty_parts.append(q.rename(c))
+            shipments.extend({"code": sku, "qty": float(v), "arrival_date": pd.Timestamp(d1)}
+                             for sku, v in zip(df[code], q) if v > 0)
             arrivals.append(pd.Series(np.where(q > 0, pd.Timestamp(d1), pd.NaT), index=df.index))
         qty = pd.concat(qty_parts, axis=1).sum(axis=1)
         next_arr = pd.concat(arrivals, axis=1).min(axis=1)
@@ -278,6 +287,9 @@ def read_in_transit(path: Path, data_date: date) -> tuple[pd.DataFrame, pd.DataF
                 arr = pd.Timestamp(data_date.year, int(m.group(2)), int(m.group(1)))
         per_sku = pd.DataFrame({"code": df[code], "in_transit": qty,
                                 "next_arrival": np.where(qty > 0, arr, pd.NaT)})
+        if tcol:
+            shipments.extend({"code": sku, "qty": float(v), "arrival_date": arr}
+                             for sku, v in zip(df[code], qty) if v > 0)
         for src, dst in [("Категория 2026", "abc_class"), ("Свободный остаток", "stock_free"), ("СС реал", "cost"),
                          ("Остаток", "stock_total"), ("Артикул поставщика", "article"),
                          ("Наименование", "name")]:
@@ -288,6 +300,7 @@ def read_in_transit(path: Path, data_date: date) -> tuple[pd.DataFrame, pd.DataF
 
     per_sku = per_sku.groupby("code", as_index=False).agg(in_transit=("in_transit", "sum"),
                                                           next_arrival=("next_arrival", "min"))
+    per_sku.attrs["shipments"] = pd.DataFrame(shipments, columns=["code", "qty", "arrival_date"])
     return per_sku, pd.DataFrame(orders), extra.drop_duplicates("code")
 
 
@@ -318,7 +331,54 @@ def resolve_files(key: str, directory: Path | None = None) -> dict[str, Path]:
     """Файл, загруженный через интерфейс (data/uploads/<поставщик>/), важнее демо-файла."""
     d = Path(directory or constants.SUPPLIERS[key]["dir"])
     up = UPLOAD_DIR / key
-    return {k: (up / v if (up / v).exists() else d / v) for k, v in constants.DATA_FILES.items()}
+    required = {k: (up / v if (up / v).exists() else d / v) for k, v in constants.DATA_FILES.items()}
+    for kind, filename in constants.OPTIONAL_DATA_FILES.items():
+        path = up / filename if (up / filename).exists() else d / filename
+        if path.exists():
+            required[kind] = path
+    return required
+
+
+def read_current_stock(path: Path, data_date: date) -> pd.Series:
+    raw = _read_raw(path)
+    df = _with_header(raw, _find_header_row(raw, "Код"))
+    code, qty, stamp = _col(df, "Код 1с", "Номенклатура.Код"), _col(df, "Свободный остаток"), _col(df, "Дата")
+    df[code] = df[code].map(_norm_code)
+    df = df.dropna(subset=[code]).copy()
+    q = pd.to_numeric(df[qty], errors="coerce")
+    dates = pd.to_datetime(df[stamp], dayfirst=True, errors="coerce")
+    if df.empty or df[code].duplicated().any() or not np.isfinite(q).all() or (q < 0).any():
+        raise ValueError("Текущие остатки: нужны уникальные коды и неотрицательные числа без пустых значений.")
+    if dates.isna().any() or not (dates.dt.date == data_date).all():
+        raise ValueError(f"Дата текущих остатков должна совпадать с датой расчёта {data_date}.")
+    return pd.Series(q.to_numpy(), index=df[code], name="stock_now")
+
+
+def apply_stockout_periods(monthly: pd.DataFrame, path: Path, data_date: date) -> pd.DataFrame:
+    raw = _read_raw(path)
+    df = _with_header(raw, _find_header_row(raw, "Код"))
+    code, start, end = _col(df, "Код 1с", "Номенклатура.Код"), _col(df, "Начало"), _col(df, "Конец")
+    df[code] = df[code].map(_norm_code)
+    df = df.dropna(subset=[code]).copy()
+    starts = pd.to_datetime(df[start], dayfirst=True, errors="coerce").dt.normalize()
+    ends = pd.to_datetime(df[end], dayfirst=True, errors="coerce").dt.normalize()
+    if df.empty or starts.isna().any() or ends.isna().any() or (ends < starts).any():
+        raise ValueError("Stockout: нужны код товара, корректные даты начала и конца периода.")
+    days_by_code = {}
+    min_date = monthly["month"].min().start_time
+    cutoff = pd.Timestamp(data_date)
+    for sku, begin, finish in zip(df[code], starts, ends):
+        covered = days_by_code.setdefault(sku, set())
+        covered.update(pd.date_range(max(begin, min_date), min(finish, cutoff), freq="D"))
+    out = monthly.copy()
+    counts = {}
+    for sku, dates in days_by_code.items():
+        for day in dates:
+            key = (sku, day.to_period("M"))
+            counts[key] = counts.get(key, 0) + 1
+    out["stockout_days"] = [counts.get((sku, month), 0) if sku in days_by_code else np.nan
+                           for sku, month in zip(out["code"], out["month"])]
+    return out
 
 
 def load_supplier(key: str, directory: Path | None = None) -> SupplierData:
@@ -336,10 +396,13 @@ def load_supplier(key: str, directory: Path | None = None) -> SupplierData:
     stock_m, units = read_stock_monthly(files["stock_monthly"])
     moq = read_moq(files["moq"])
     transit, orders, extra = read_in_transit(files["in_transit"], data_date)
+    shipments = transit.attrs.get("shipments", pd.DataFrame())
     season = read_seasonality(files["seasonality"])
 
     monthly = pd.merge(sales_m, stock_m, on=["code", "month"], how="outer").fillna(
         {"sales_1c": 0.0, "stock_open": 0.0})
+    if "stockouts" in files:
+        monthly = apply_stockout_periods(monthly, files["stockouts"], data_date)
 
     # справочник SKU: объединение всех источников
     codes = pd.Index(sorted(set(monthly["code"]) | set(tx["code"]) | set(moq["code"]) | set(transit["code"])))
@@ -366,6 +429,8 @@ def load_supplier(key: str, directory: Path | None = None) -> SupplierData:
     if "abc_class" in extra:
         abc = pd.to_numeric(extra.set_index("code")["abc_class"], errors="coerce").reindex(codes)
         items["abc_class"] = abc.map(lambda v: "" if pd.isna(v) else str(int(v)))
+        provided = items["abc_class"] != ""
+        items.loc[provided, "category"] = "SE-" + items.loc[provided, "abc_class"]
     else:
         items["abc_class"] = ""
     items["moq"] = moq.set_index("code")["moq"].reindex(codes).fillna(1)
@@ -384,13 +449,31 @@ def load_supplier(key: str, directory: Path | None = None) -> SupplierData:
     else:
         items["stock_now"] = np.nan
         stock_source = "начальный остаток текущего месяца минус продажи с начала месяца по отчёту 1С"
+    items["stock_estimated"] = items["stock_now"].isna()
+    items["moq_missing"] = ~items.index.isin(moq["code"])
     cur = pd.Period(data_date, freq="M")
     open_cur = stock_m[stock_m["month"] == cur].set_index("code")["stock_open"]
     # продажи текущего месяца — из того же месячного отчёта 1С, что и остатки (накладные с ним расходятся)
     sold_cur = sales_m[sales_m["month"] == cur].groupby("code")["sales_1c"].sum()
     approx = (open_cur.reindex(codes).fillna(0) - sold_cur.reindex(codes).fillna(0)).clip(lower=0)
     items["stock_now"] = items["stock_now"].fillna(approx)
-    warnings.append(f"Текущий остаток: {stock_source}.")
+    if "stock_current" in files:
+        current = read_current_stock(files["stock_current"], data_date)
+        matched = items.index.intersection(current.index)
+        items.loc[matched, "stock_now"] = current.loc[matched]
+        items.loc[matched, "stock_estimated"] = False
+        warnings.append(f"Точная ведомость на {data_date}: остатки обновлены для {len(matched)} позиций.")
+    warnings.append(f"Базовый источник текущего остатка: {stock_source}.")
+    approximate_count = int(items["stock_estimated"].sum())
+    if approximate_count:
+        warnings.append(f"У {approximate_count} позиций остаток оценён без поступлений текущего месяца. "
+                        "Перед утверждением сверить с актуальной материальной ведомостью 1С.")
+    if "client_id" not in tx or not tx["client_id"].notna().any():
+        warnings.append("ID клиентов отсутствуют: выбросы выявляются по накладным и месяцам. "
+                        "Объединить несколько накладных одного клиента по этим файлам невозможно.")
+    warnings.append("Загружены точные периоды stockout; для перечисленных товаров они приоритетнее месячной оценки."
+                    if "stockouts" in files else
+                    "Отдельные периоды stockout не переданы: отсутствие товара оценивается по месячным остаткам.")
 
     # сверка построчных продаж с месячным отчётом 1С (с 2024 г.)
     since = pd.Period("2024-01", freq="M")
@@ -415,7 +498,7 @@ def load_supplier(key: str, directory: Path | None = None) -> SupplierData:
         warnings.append("Нет построчных продаж — разовые заказы не выявляются.")
 
     return SupplierData(key=key, name=sup["name"], transactions=tx, monthly=monthly, items=items,
-                        seasonality=season, orders=orders, data_date=data_date, warnings=warnings)
+                        seasonality=season, orders=orders, data_date=data_date, warnings=warnings, shipments=shipments)
 
 
 # ---------- cache ----------

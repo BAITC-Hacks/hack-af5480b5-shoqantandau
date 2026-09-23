@@ -16,6 +16,7 @@ import calendar
 import pickle
 from dataclasses import replace
 from datetime import date
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -25,6 +26,11 @@ import constants
 from . import engine, loaders
 
 CACHE = constants.BASE_DIR / "data" / "cache" / "backtest.pkl"
+
+
+def fingerprint():
+    return (2, tuple((key, loaders._fingerprint(loaders.resolve_files(key))) for key in constants.SUPPLIERS),
+            Path(engine.__file__).stat().st_mtime_ns)
 
 
 def _truncate(data: loaders.SupplierData, month: pd.Period) -> loaders.SupplierData:
@@ -42,7 +48,7 @@ def _truncate(data: loaders.SupplierData, month: pd.Period) -> loaders.SupplierD
 
 
 def run(n_months: int = 6) -> dict:
-    result = {"created": str(date.today()), "suppliers": {}}
+    result = {"created": str(date.today()), "suppliers": {}, "fingerprint": fingerprint()}
     for key in constants.SUPPLIERS:
         data = loaders.get_supplier(key)
         last_full = pd.Period(data.data_date, freq="M") - 1
@@ -55,31 +61,39 @@ def run(n_months: int = 6) -> dict:
                 continue
             fc = fc.set_index("code_1c")
             hist = [p for p in actual.columns if m - 12 <= p < m]
-            naive = actual[hist].mean(axis=1) * days / 30.0
-            codes = fc.index.intersection(actual.index)
-            fact = actual.loc[codes, m]
-            for label, pred in (("service", fc.loc[codes, "forecast"]), ("excel", naive.reindex(codes).fillna(0))):
-                err = pred - fact
-                rows.append({"month": str(m), "method": label, "fact": float(fact.sum()),
+            naive = actual[hist].mean(axis=1)  # same monthly mean baseline, not an invented Excel algorithm
+            codes = actual.index.intersection(data.items.index)
+            fact_all = actual.loc[codes, m]
+            # Include SKUs with no model forecast (zero), including newly sold products.
+            pred_all = fc["forecast"].reindex(codes).fillna(0)
+            for unit, unit_items in data.items.loc[codes].groupby("unit"):
+                uc = unit_items.index
+                fact = fact_all.loc[uc]
+                for label, pred in (("service", pred_all.loc[uc]), ("excel", naive.reindex(uc).fillna(0))):
+                    err = pred - fact
+                    rows.append({"month": str(m), "method": label, "unit": unit, "fact": float(fact.sum()),
                              "abs_err": float(err.abs().sum()), "bias": float(err.sum()),
                              "over": float(err.clip(lower=0).sum()), "under": float((-err).clip(lower=0).sum()),
-                             "sku": int(len(codes))})
+                             "sku": int(len(uc))})
         df = pd.DataFrame(rows)
         if df.empty:
             continue
-        by = df.groupby("method")[["fact", "abs_err", "bias", "over", "under"]].sum()
-        summary = {
-            meth: {"wape": r.abs_err / r.fact if r.fact else None, "bias": r.bias / r.fact if r.fact else None,
-                   "over": r.over, "under": r.under}
-            for meth, r in by.iterrows()
-        }
-        per_month = []
-        for mo, g in df.groupby("month"):
-            g = g.set_index("method")
-            per_month.append({"month": mo, "sku": int(g["sku"].iloc[0]), "fact": float(g["fact"].iloc[0]),
-                              "service": float(g.loc["service", "abs_err"] / g.loc["service", "fact"]),
-                              "excel": float(g.loc["excel", "abs_err"] / g.loc["excel", "fact"])})
-        result["suppliers"][key] = {"name": data.name, "summary": summary, "per_month": per_month}
+        for unit, unit_df in df.groupby("unit"):
+            by = unit_df.groupby("method")[["fact", "abs_err", "bias", "over", "under"]].sum()
+            summary = {
+                meth: {"wape": r.abs_err / r.fact if r.fact else None, "bias": r.bias / r.fact if r.fact else None,
+                       "over": r.over, "under": r.under}
+                for meth, r in by.iterrows()
+            }
+            per_month = []
+            for mo, g in unit_df.groupby("month"):
+                g = g.set_index("method")
+                total = float(g["fact"].iloc[0])
+                per_month.append({"month": mo, "sku": int(g["sku"].iloc[0]), "fact": total,
+                                  "service": float(g.loc["service", "abs_err"] / total) if total else None,
+                                  "excel": float(g.loc["excel", "abs_err"] / total) if total else None})
+            result["suppliers"][f"{key}:{unit}"] = {
+                "name": f"{data.name} · {unit}", "summary": summary, "per_month": per_month}
     CACHE.parent.mkdir(parents=True, exist_ok=True)
     with open(CACHE, "wb") as fh:
         pickle.dump(result, fh)
@@ -90,7 +104,8 @@ def load() -> dict | None:
     if CACHE.exists():
         try:
             with open(CACHE, "rb") as fh:
-                return pickle.load(fh)
+                result = pickle.load(fh)
+                return result if result.get("fingerprint") == fingerprint() else None
         except Exception:
             return None
     return None

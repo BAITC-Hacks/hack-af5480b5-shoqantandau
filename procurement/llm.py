@@ -45,6 +45,9 @@ def _payload(line) -> dict:
         "ед": d.get("unit", "шт"), "остаток": round(line.stock), "в_пути": round(line.in_transit),
         "спрос_в_месяц": round(line.regular_demand, 1), "прогноз_на_горизонт": round(line.forecast),
         "страховой_запас": round(line.safety_stock), "кратность": line.moq,
+        "в_пути_в_горизонте": d.get("eligible_transit", line.in_transit),
+        "в_пути_позже_горизонта": d.get("late_transit", 0),
+        "первый_дефицит_через_дней": d.get("first_shortage_day"),
         "срок_поставки_дн": d.get("lead"), "горизонт_дн": d.get("horizon"),
         "срочность": line.get_urgency_display(),
         "дней_хватит_остатка": None if (line.days_of_cover or 0) >= 9999 else round(line.days_of_cover or 0),
@@ -75,8 +78,12 @@ def template_explanation(line) -> str:
                      f"в месяц, а до следующей поставки и следующего заказа нужно около {line.forecast + line.safety_stock:.0f} {unit} "
                      f"с запасом.{cover}")
     else:
-        parts.append(f"Заказывать сейчас не нужно: остатка {line.stock:.0f} и товара в пути {line.in_transit:.0f} "
+        eligible = d.get("eligible_transit", line.in_transit)
+        parts.append(f"Плановый заказ равен нулю: остаток {line.stock:.0f} и поставки в горизонте {eligible:.0f} "
                      f"хватает на прогноз {line.forecast:.0f} {unit} с запасом.")
+    if d.get("first_shortage_day") is not None and d["first_shortage_day"] < d.get("lead", 0):
+        parts.append(f"Но до поступления возможен дефицит через {d['first_shortage_day']:.1f} дн. "
+                     "Нужно ускорить поставку или переместить товар.")
     oo = [o for o in d.get("one_offs", []) if o.get("in_window")]
     if oo:
         big = max(oo, key=lambda o: o["qty"])

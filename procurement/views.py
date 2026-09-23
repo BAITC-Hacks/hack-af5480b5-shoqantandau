@@ -1,4 +1,5 @@
 import shutil
+import math
 
 import numpy as np
 import pandas as pd
@@ -12,6 +13,8 @@ from django.contrib.auth.views import LoginView
 from django.core.exceptions import PermissionDenied
 
 from . import loaders
+from .forms import CalculationForm
+from django.db import transaction
 
 
 def _need(request, perm: str):
@@ -39,7 +42,8 @@ def _data_status():
     for key, sup in constants.SUPPLIERS.items():
         files = []
         resolved = loaders.resolve_files(key)
-        for kind, fname in constants.DATA_FILES.items():
+        visible_files = {**constants.DATA_FILES, **{k: v for k, v in constants.OPTIONAL_DATA_FILES.items() if k in resolved}}
+        for kind, fname in visible_files.items():
             path = resolved[kind]
             files.append({"kind": kind, "name": fname, "exists": path.exists(),
                           "uploaded": loaders.UPLOAD_DIR in path.parents,
@@ -62,7 +66,8 @@ def index(request):
             s["error"] = f"{type(exc).__name__}: {exc}"
     kinds = {"sales_transactions": "Динамика продаж (накладные)", "sales_monthly": "Ежемесячные продажи",
              "stock_monthly": "Ежемесячные остатки", "in_transit": "Товар в пути", "moq": "MOQ / кратность",
-             "seasonality": "Сезонность"}
+             "seasonality": "Сезонность", "stock_current": "Точные остатки на дату (доп.)",
+             "stockouts": "Периоды отсутствия товара (доп.)"}
     return render(request, "procurement/index.html", {"suppliers": suppliers, "kinds": kinds,
                                                       "has_uploads": loaders.UPLOAD_DIR.exists()})
 
@@ -74,13 +79,28 @@ def upload_data(request):
     sup = request.POST.get("supplier")
     kind = request.POST.get("kind")
     f = request.FILES.get("file")
-    if sup not in constants.SUPPLIERS or kind not in constants.DATA_FILES or not f:
+    available_files = {**constants.DATA_FILES, **constants.OPTIONAL_DATA_FILES}
+    if sup not in constants.SUPPLIERS or kind not in available_files or not f:
         messages.error(request, "Выберите поставщика, тип выгрузки и xlsx-файл.")
         return redirect("procurement:index")
     if not f.name.lower().endswith(".xlsx"):
         messages.error(request, "Нужен файл .xlsx — выгрузка из 1С в Excel.")
         return redirect("procurement:index")
-    target = loaders.UPLOAD_DIR / sup / constants.DATA_FILES[kind]
+    if f.size > 30 * 1024 * 1024:
+        messages.error(request, "Максимальный размер выгрузки — 30 МБ.")
+        return redirect("procurement:index")
+    import zipfile
+    try:
+        with zipfile.ZipFile(f) as archive:
+            if sum(x.file_size for x in archive.infolist()) > 300 * 1024 * 1024:
+                raise ValueError("Слишком большой распакованный файл")
+            if "xl/workbook.xml" not in archive.namelist():
+                raise ValueError("Не является книгой Excel")
+        f.seek(0)
+    except (zipfile.BadZipFile, ValueError):
+        messages.error(request, "Нужен корректный файл Excel .xlsx размером до 30 МБ.")
+        return redirect("procurement:index")
+    target = loaders.UPLOAD_DIR / sup / available_files[kind]
     target.parent.mkdir(parents=True, exist_ok=True)
     backup = target.read_bytes() if target.exists() else None
     with open(target, "wb") as out:
@@ -95,7 +115,7 @@ def upload_data(request):
             target.write_bytes(backup)
         messages.error(request, f"Файл не подходит по формату, оставлены прежние данные. Ошибка: {exc}")
         return redirect("procurement:index")
-    messages.success(request, f"{constants.SUPPLIERS[sup]['name']}: загружен «{f.name}» как {constants.DATA_FILES[kind]}. "
+    messages.success(request, f"{constants.SUPPLIERS[sup]['name']}: загружен «{f.name}» как {available_files[kind]}. "
                               f"Следующий расчёт использует новые данные.")
     return redirect("procurement:index")
 
@@ -209,15 +229,21 @@ from .models import CalculationRun  # noqa: E402
 
 def _num(v, cast=float):
     try:
-        return cast(v) if v not in (None, "") else None
-    except (TypeError, ValueError):
+        value = cast(v) if v not in (None, "") else None
+        return value if value is None or math.isfinite(value) else None
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
 def run_form(request):
     if request.method == "POST":
         _need(request, "run_calculation")
-        f = request.POST
+        form = CalculationForm(request.POST)
+        if not form.is_valid():
+            messages.error(request, "Проверьте параметры: " + "; ".join(
+                f"{field}: {', '.join(errors)}" for field, errors in form.errors.items()))
+            return redirect("procurement:run_form")
+        f = form.cleaned_data
         lead_times = {k: v for k in constants.SUPPLIERS if (v := _num(f.get(f"lead_{k}"), int))}
         params = engine.Params(
             lead_times=lead_times,
@@ -230,7 +256,11 @@ def run_form(request):
             use_growth=bool(f.get("use_growth")),
         )
         sup = f.get("supplier") or ""
-        run = services.run_calculation(params, [sup] if sup in constants.SUPPLIERS else None, user=request.user)
+        try:
+            run = services.run_calculation(params, [sup] if sup in constants.SUPPLIERS else None, user=request.user)
+        except (FileNotFoundError, ValueError, KeyError) as exc:
+            messages.error(request, f"Расчёт не выполнен: {exc}. Проверьте данные и параметры.")
+            return redirect("procurement:run_form")
         return redirect("procurement:run_detail", run.pk)
     # группы товаров для выбора — только если данные уже разобраны (иначе страница открывалась бы 20–30 с)
     groups = []
@@ -255,25 +285,40 @@ def run_form(request):
     })
 
 
+@transaction.atomic
 def _apply_edits(request, run):
     """Сохранить правки количества и/или изменить статус выбранных строк."""
     action = request.POST.get("action", "save")
+    if action not in ("save", "approve", "reject", "reset"):
+        messages.error(request, "Неизвестное действие.")
+        return
     ids = [int(x) for x in request.POST.getlist("sel") if x.isdigit()]
-    changed = 0
+    planned = []
+    locked = {line.pk: line for line in run.lines.select_for_update()}
     for key, val in request.POST.items():
         if not key.startswith("qty_"):
             continue
-        line_id = _num(key[4:], int)
-        new = _num(val, int)
-        if line_id is None:
-            continue
-        line = run.lines.filter(pk=line_id).first()
+        line = locked.get(_num(key[4:], int))
         if line is None:
             continue
+        new = _num(val, int)
+        if new is None or not 0 <= new <= 1_000_000_000:
+            messages.error(request, f"{line.code_1c}: количество должно быть целым числом от 0 до 1 000 000 000.")
+            return
+        if new and abs(new / line.moq - round(new / line.moq)) > 1e-8:
+            messages.error(request, f"{line.code_1c}: количество должно быть кратно {line.moq:g}.")
+            return
+        planned.append((line, new))
+    changed = 0
+    for line, new in planned:
         final = None if new is None or new == line.qty_recommended else max(new, 0)
         if final != line.qty_final:
             line.qty_final = final
-            line.save(update_fields=["qty_final"])
+            line.status = "new"
+            line.decided_by = None
+            line.decided_at = None
+            line.reason_ai = ""
+            line.save(update_fields=["qty_final", "status", "decided_by", "decided_at", "reason_ai"])
             changed += 1
     if action in ("approve", "reject", "reset") and ids:
         status = {"approve": "approved", "reject": "rejected", "reset": "new"}[action]
@@ -287,7 +332,7 @@ def _apply_edits(request, run):
     elif action in ("approve", "reject", "reset"):
         messages.error(request, "Сначала отметьте товары галочками слева, затем нажмите кнопку.")
     elif changed:
-        messages.success(request, f"Изменённые количества сохранены: {changed}.")
+        messages.success(request, f"Изменённые количества сохранены: {changed}. Требуется повторное утверждение.")
 
 
 VIEWS = [("order", "К заказу"), ("urgent", "Срочные"), ("review", "Проверить вручную"),
@@ -303,12 +348,19 @@ def run_detail(request, pk):
     sup_keys = [k for k in run.supplier.split(",") if k]
     active = request.GET.get("supplier") or (sup_keys[0] if sup_keys else "")
     view = request.GET.get("view", "order")
+    if active not in sup_keys or view not in dict(VIEWS):
+        raise Http404("Неизвестный поставщик или вид списка")
     stat = run.stats.get(active, {})
     fields = ["pk", "code_1c", "article", "name", "category", "stock", "in_transit", "regular_demand", "moq",
               "qty_recommended", "qty_final", "urgency", "days_of_cover", "status", "needs_review", "cost"]
     rows = []
+    current_value = 0
+    current_count = 0
     for l in run.lines.filter(supplier=active).only(*fields):
         final = l.qty_to_order
+        if final > 0 and l.status != "rejected":
+            current_count += 1
+            current_value += (l.cost or 0) * final
         rows.append({
             "id": l.pk, "code": l.code_1c, "article": l.article, "name": l.name, "group": l.category,
             "stock": round(l.stock), "transit": round(l.in_transit), "demand": round(l.regular_demand, 1),
@@ -316,7 +368,7 @@ def run_detail(request, pk):
             "urg": l.urgency, "urgRank": {"high": 0, "medium": 1, "low": 2}.get(l.urgency, 3),
             "cover": None if (l.days_of_cover or 0) >= 9999 else round(l.days_of_cover, 1),
             "status": l.status, "review": l.needs_review,
-            "sum": round(l.cost * final) if l.cost else None,
+            "sum": round(l.cost * final) if l.cost else None, "cost": l.cost,
         })
     rows.sort(key=lambda r: (r["urgRank"], r["cover"] if r["cover"] is not None else 1e9))
     approved = sum(1 for r in rows if r["status"] == "approved")
@@ -327,6 +379,7 @@ def run_detail(request, pk):
         "qty_saved": (stat.get("qty_raw_total", 0) or 0) - (stat.get("qty_total", 0) or 0),
         "can_edit": request.user.has_perm("procurement.edit_order"),
         "can_export": request.user.has_perm("procurement.export_order"),
+        "current_value": current_value, "current_count": current_count,
     })
 
 
@@ -359,6 +412,8 @@ def export_run(request, pk):
     run = get_object_or_404(CalculationRun, pk=pk)
     scope = request.GET.get("scope", "approved")
     only = request.GET.get("supplier")
+    if scope not in ("approved", "draft") or (only and only not in run.supplier.split(",")):
+        raise Http404("Неизвестный поставщик или режим экспорта")
     wb = Workbook()
     wb.remove(wb.active)
     headers = ["Код 1С", "Артикул поставщика", "Наименование", "Количество", "Ед.", "Кратность",
@@ -366,7 +421,7 @@ def export_run(request, pk):
     total = 0
     for key in [k for k in run.supplier.split(",") if k and (not only or k == only)]:
         qs = run.lines.filter(supplier=key)
-        qs = qs.filter(status="approved") if scope == "approved" else qs.filter(qty_recommended__gt=0).exclude(status="rejected")
+        qs = qs.filter(status="approved") if scope == "approved" else qs.exclude(status="rejected")
         ws = wb.create_sheet(constants.SUPPLIERS.get(key, {}).get("name", key)[:31])
         ws.append(headers)
         for c in ws[1]:
@@ -377,6 +432,10 @@ def export_run(request, pk):
             ws.append([l.code_1c, l.article, l.name, l.qty_to_order, (l.details or {}).get("unit", "шт"),
                        l.moq, l.get_urgency_display(), round(l.stock), round(l.in_transit),
                        l.qty_recommended, l.cost, round(l.value_to_order, 2) if l.value_to_order else None, l.reason])
+            # A name/article imported from Excel must never become an executable formula.
+            for cell in ws[ws.max_row]:
+                if isinstance(cell.value, str):
+                    cell.data_type = "s"
             total += 1
         for col, w in zip("ABCDEFGHIJKLM", [14, 22, 60, 12, 6, 10, 11, 10, 10, 14, 14, 14, 100]):
             ws.column_dimensions[col].width = w
@@ -405,6 +464,13 @@ def check_scenarios(request):
     code = (g.get("code") or DEMO_CODES.get(sup, "")).strip()
     data = loaders.get_supplier(sup)
     ctx = {"suppliers": constants.SUPPLIERS, "sup": sup, "code": code, "g": g}
+    for name, low, high in (("big_qty", 0, 1e9), ("transit_add", 0, 1e9),
+                            ("stock_val", 0, 1e9), ("growth", -100, 300)):
+        if g.get(name) not in (None, ""):
+            value = _num(g[name])
+            if value is None or not low <= value <= high:
+                ctx["error"] = f"{name}: укажите число от {low:g} до {high:g}."
+                return render(request, "procurement/check.html", ctx)
     if code not in data.items.index:
         ctx["error"] = f"Артикул {code} не найден у поставщика {data.name}."
         return render(request, "procurement/check.html", ctx)
@@ -436,7 +502,7 @@ def check_scenarios(request):
         ("base", "Базовый расчёт", "Все данные как есть", {}),
         ("oneoff", f"+ разовая продажа {big_qty:.0f} шт.", "Требование 4: крупная сделка не раздувает заказ",
          {"test_orders": test_order}),
-        ("oneoff_raw", "То же, но без очистки данных", "Для сравнения: так посчитал бы Excel по сырым продажам",
+        ("oneoff_raw", "То же, но без очистки данных", "Тот же алгоритм с отключённым поиском выбросов",
          {"test_orders": test_order, "use_outliers": False}),
         ("spike", f"Всплеск {big_qty:.0f} шт. только в отчёте 1С", "Требование 4: всплеск без накладной тоже сглаживается",
          {"test_orders": test_month}),
@@ -475,6 +541,7 @@ from .models import OrderLine  # noqa: E402
 @require_POST
 def explain_line(request, pk):
     line = get_object_or_404(OrderLine, pk=pk)
+    _need(request, "edit_order")
     text, source = llm.explain(line)
     line.reason_ai = text
     line.save(update_fields=["reason_ai"])

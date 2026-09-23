@@ -1,0 +1,23 @@
+{% load static %}<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Заказы поставщикам{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{% static 'procurement/app.css' %}">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="{% url 'procurement:index' %}">Пополнение склада</a>
+    <nav>
+      <a href="{% url 'procurement:index' %}">Данные</a>
+    </nav>
+  </header>
+  <main class="page">
+    {% if messages %}{% for m in messages %}<div class="flash flash-{{ m.tags }}">{{ m }}</div>{% endfor %}{% endif %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

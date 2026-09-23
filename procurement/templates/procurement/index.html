@@ -1,0 +1,22 @@
+{% extends "procurement/base.html" %}
+{% block content %}
+<h1>Исходные данные</h1>
+<p class="lead">Выгрузки из 1С по поставщикам. Расчёт заказов использует все шесть файлов каждого поставщика.</p>
+
+<div class="suppliers">
+{% for s in suppliers %}
+  <section class="supplier">
+    <h2>{{ s.name }} {% if s.ready %}<span class="tag ok">все файлы на месте</span>{% else %}<span class="tag bad">не хватает файлов</span>{% endif %}</h2>
+    <table class="grid">
+      <thead><tr><th>Файл</th><th class="num">Размер, КБ</th><th>Статус</th></tr></thead>
+      <tbody>
+      {% for f in s.files %}
+        <tr><td>{{ f.name }}</td><td class="num">{{ f.size_kb }}</td>
+            <td>{% if f.exists %}есть{% else %}<b class="bad-text">нет</b>{% endif %}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+{% endfor %}
+</div>
+{% endblock %}

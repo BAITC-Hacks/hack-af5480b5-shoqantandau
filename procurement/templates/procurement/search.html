@@ -1,0 +1,22 @@
+{% extends "procurement/base.html" %}
+{% block content %}
+<h1>Артикулы</h1>
+<form class="search" method="get">
+  <input type="search" name="q" value="{{ q }}" placeholder="Код 1С, артикул или часть названия" autofocus>
+  <button class="btn" type="submit">Найти</button>
+</form>
+{% if q %}
+  {% if results %}
+  <table class="grid">
+    <thead><tr><th>Поставщик</th><th>Код 1С</th><th>Артикул</th><th>Наименование</th></tr></thead>
+    <tbody>
+    {% for r in results %}
+      <tr><td>{{ r.supplier }}</td>
+          <td><a href="{% url 'procurement:sku_detail' r.supplier_key r.code %}">{{ r.code }}</a></td>
+          <td>{{ r.article }}</td><td>{{ r.name }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="note">Ничего не найдено по «{{ q }}». Попробуйте часть кода или названия.</p>{% endif %}
+{% endif %}
+{% endblock %}

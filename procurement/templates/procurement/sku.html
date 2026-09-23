@@ -1,0 +1,40 @@
+{% extends "procurement/base.html" %}
+{% block content %}
+<p class="crumbs"><a href="{% url 'procurement:sku_search' %}">Артикулы</a> / {{ supplier }}</p>
+<h1>{{ item.name }}</h1>
+<dl class="facts">
+  <div><dt>Код 1С</dt><dd>{{ code }}</dd></div>
+  <div><dt>Артикул</dt><dd>{{ item.article|default:"—" }}</dd></div>
+  <div><dt>Группа</dt><dd>{{ item.category }}</dd></div>
+  {% if item.abc_class %}<div><dt>Категория</dt><dd>{{ item.abc_class }}</dd></div>{% endif %}
+  <div><dt>Остаток сейчас</dt><dd>{{ item.stock_now|floatformat:0 }} {{ item.unit }}</dd></div>
+  <div><dt>В пути</dt><dd>{{ item.in_transit|floatformat:0 }}{% if next_arrival %} <small>(до {{ next_arrival|date:"d.m.Y" }})</small>{% endif %}</dd></div>
+  <div><dt>Кратность</dt><dd>{{ item.moq|floatformat:0 }}</dd></div>
+</dl>
+
+<div class="two-col">
+  <section>
+    <h2>По месяцам</h2>
+    <table class="grid">
+      <thead><tr><th>Месяц</th><th class="num">Продажи (отчёт 1С)</th><th class="num">Продажи (накладные)</th><th class="num">Остаток на начало</th></tr></thead>
+      <tbody>
+      {% for r in rows %}
+        <tr{% if r.stock_open <= 0 %} class="row-stockout"{% endif %}>
+          <td>{{ r.month }}</td><td class="num">{{ r.sales_1c|floatformat:0 }}</td>
+          <td class="num">{{ r.tx|floatformat:0 }}</td><td class="num">{{ r.stock_open|floatformat:0 }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <p class="note">Строки с нулевым остатком на начало месяца подсвечены — это кандидаты в периоды отсутствия товара.</p>
+  </section>
+  <section>
+    <h2>Крупнейшие накладные</h2>
+    <table class="grid">
+      <thead><tr><th>Накладная</th><th>Дата</th><th class="num">Кол-во</th></tr></thead>
+      <tbody>
+      {% for d in top_docs %}<tr><td>{{ d.doc }}</td><td>{{ d.date|date:"d.m.Y" }}</td><td class="num">{{ d.qty|floatformat:0 }}</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </section>
+</div>
+{% endblock %}
